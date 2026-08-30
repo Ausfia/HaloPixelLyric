@@ -1,24 +1,23 @@
 namespace HaloPixelLyric;
 
 /// <summary>
-/// 注入网易云页面的歌词采集脚本（v5，轮询模式 + 演唱时长）。
+/// 注入网易云页面的歌词采集脚本（v7，轮询模式 + 演唱时长 + 下一句预取）。
 /// 原理：监听 ul.lyric 内 li 的 class 变化，"line current" 即网易云正在显示的歌词行
 /// （数据层驱动，与播放页视图是否可见无关）。
-/// v5 新增：采集 li 的 data-time（本行开始时间）与下一行 data-time 的差值 =
-/// 本句演唱总时长（sentenceMs），以及本行开始时刻 changedAt，
-/// 供 C# 侧按演唱进度分配分页驻留时间。
+/// 采集：当前行文本 current、句长 sentenceMs（下一行 data-time 差）、行切换时刻 changedAt、
+/// 下一行文本 nextText（供 C# 预推第一页，抵消每句首屏的检测/动画延迟）。
 /// 说明：不使用 console/binding 事件通道——该 CEF 定制内核不转发这些事件。
 /// </summary>
 public static class WatcherScript
 {
     public const string Code = """
         (function () {
-            if (window.__haloLyric && window.__haloLyric.v === 6) { return 'alive'; }
+            if (window.__haloLyric && window.__haloLyric.v === 7) { return 'alive'; }
             if (window.__haloLyricTimer) { try { clearInterval(window.__haloLyricTimer); } catch (e) { } }
             var state = { observer: null, lastTime: null };
 
             function update() {
-                var t = null, ms = 0;
+                var t = null, ms = 0, nx = null;
                 var li = document.querySelector('ul.lyric li.current');
                 if (li) {
                     var ps = Array.prototype.slice.call(li.querySelectorAll('p'))
@@ -29,6 +28,12 @@ public static class WatcherScript
                     var sib = li.nextElementSibling;
                     var t1 = sib ? parseFloat(sib.getAttribute('data-time')) : NaN;
                     if (isFinite(t0) && isFinite(t1) && t1 > t0) ms = Math.round((t1 - t0) * 1000);
+                    if (sib) {
+                        var nps = Array.prototype.slice.call(sib.querySelectorAll('p'))
+                            .map(function (p) { return (p.textContent || '').trim(); })
+                            .filter(Boolean);
+                        nx = nps.length ? nps[0] : null;
+                    }
                     if (t0 !== state.lastTime) {
                         state.lastTime = t0;
                         window.__haloLyric.changedAt = Date.now();
@@ -36,6 +41,7 @@ public static class WatcherScript
                 }
                 window.__haloLyric.current = t;
                 window.__haloLyric.sentenceMs = ms;
+                window.__haloLyric.nextText = nx;
             }
 
             function mount() {
@@ -55,7 +61,7 @@ public static class WatcherScript
                 return true;
             }
 
-            window.__haloLyric = { v: 6, current: null, sentenceMs: 0, changedAt: 0 };
+            window.__haloLyric = { v: 7, current: null, sentenceMs: 0, changedAt: 0, nextText: null };
             window.__haloLyricTimer = setInterval(function () { if (!mount()) update(); }, 800);
             mount();
             update();

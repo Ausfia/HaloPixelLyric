@@ -177,6 +177,8 @@ public sealed class LyricService
 
                     using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     var lastSentence = string.Empty;
+                    var lastAnchor = 0L;          // 最近一次句开始的墙钟锚（Unix ms）
+                    var prePushedFrom = string.Empty;   // 预推发起时 current 停留的旧句（等待正式切换期间忽略它）
                     var lastPushAt = DateTimeOffset.MinValue;
                     List<string>? pendingPages = null;
                     var pageIndex = 0;
@@ -190,10 +192,11 @@ public sealed class LyricService
                             try
                             {
                                 var raw = await cdp.EvaluateAsync(
-                                    "window.__haloLyric ? JSON.stringify({t: window.__haloLyric.current === null ? '' : window.__haloLyric.current, ms: window.__haloLyric.sentenceMs || 0, at: window.__haloLyric.changedAt || 0}) : null");
+                                    "window.__haloLyric ? JSON.stringify({t: window.__haloLyric.current === null ? '' : window.__haloLyric.current, ms: window.__haloLyric.sentenceMs || 0, at: window.__haloLyric.changedAt || 0, nx: window.__haloLyric.nextText === null ? '' : window.__haloLyric.nextText}) : null");
                                 if (raw is not null)
                                 {
                                     string sentence = "";
+                                    string nextText = "";
                                     long sentenceMs = 0, changedAt = 0;
                                     try
                                     {
@@ -201,6 +204,7 @@ public sealed class LyricService
                                         sentence = doc.RootElement.GetProperty("t").GetString() ?? "";
                                         sentenceMs = doc.RootElement.GetProperty("ms").GetInt64();
                                         changedAt = doc.RootElement.GetProperty("at").GetInt64();
+                                        nextText = doc.RootElement.GetProperty("nx").GetString() ?? "";
                                     }
                                     catch { }
 
@@ -209,13 +213,22 @@ public sealed class LyricService
                                         var trimmed = sentence;   // 整句不预截断，截断在分页后进行
                                         if (trimmed != lastSentence)
                                         {
+                                            if (prePushedFrom.Length > 0 && trimmed == prePushedFrom)
+                                            {
+                                                // 预推等待期：current 仍停留在旧句，忽略（避免把预推队列拉回去）
+                                            }
+                                            else
+                                            {
                                             lastSentence = trimmed;
+                                            var anchorNow = changedAt > 0 ? changedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                            lastAnchor = anchorNow;
+                                            prePushedFrom = string.Empty;   // 常规新句处理：清除预推状态
                                             pendingPages = LyricLogic.SplitLyricPages(trimmed, Settings);
                                             pageIndex = 0;
                                             if (pendingPages.Count > 1)
                                                 Log?.Invoke($"[分句] 「{trimmed}」→ {pendingPages.Count} 页（句长 {sentenceMs}ms）");
 
-                                            var base0 = changedAt > 0 ? changedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                            var base0 = anchorNow;
                                             var totalUnits = LyricLogic.DisplayUnits(trimmed);
                                             double acc = 0;
                                             pageDeadlines.Clear();
@@ -236,6 +249,50 @@ public sealed class LyricService
                                                     acc += estimateMs * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
                                                 pageDeadlines.Add(base0 + (long)acc - Settings.PageLeadMs);
                                             }
+                                            }
+                                        }
+                                    }
+
+                                    // ===== 预推命中检测 =====
+                                    // 正式切换到了预推的句子（trimmed == lastSentence 不会触发上面的新句分支）：
+                                    // 不重排不重推（第一页已在预推时上屏），仅用真实切换时刻更新锚点，供下一句预推更准。
+                                    if (prePushedFrom.Length > 0 && sentence.Length > 0 && sentence == lastSentence)
+                                    {
+                                        prePushedFrom = string.Empty;
+                                        if (changedAt > 0) lastAnchor = changedAt;
+                                        Log?.Invoke("[预推命中] 正式切换与预推一致");
+                                    }
+
+                                    // ===== 下一句第一页预推 =====
+                                    // 当前句所有页已推完、拿到下一句文本时：在「下一句开始时刻 − 提前量」主动推它的第一页，
+                                    // 抵消每句首屏的检测+动画延迟（预测锚 = 本句开始 + 句长）。
+                                    // 暂停/拖动防护：超过预测时刻 +1.5s 当前句仍未切换则放弃，等正式切换覆盖。
+                                    if (pendingPages is null && sentenceMs > 0 && lastAnchor > 0
+                                        && nextText.Length > 0 && nextText != lastSentence)
+                                    {
+                                        var nextAt = lastAnchor + sentenceMs;
+                                        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                        if (nowMs >= nextAt - Settings.PageLeadMs && nowMs <= nextAt + 1500)
+                                        {
+                                            var pages = LyricLogic.SplitLyricPages(nextText, Settings);
+                                            // 以预测时刻为基准排后续页（下一句时长未知，按字数估算）
+                                            var totalUnits = LyricLogic.DisplayUnits(nextText);
+                                            var estimateMs = LyricLogic.EstimateHoldMs(nextText, Settings);
+                                            double acc = 0;
+                                            pageDeadlines.Clear();
+                                            pageMinHoldMs = (int)Math.Clamp(estimateMs / (double)pages.Count, 600, 1200);
+                                            foreach (var pg in pages)
+                                            {
+                                                acc += estimateMs * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
+                                                pageDeadlines.Add(nextAt + (long)acc - Settings.PageLeadMs);
+                                            }
+                                            lastSentence = nextText;   // 正式切换到来时 trimmed==lastSentence，直接沿用此队列
+                                            prePushedFrom = sentence;  // 记住发起预推时的旧句，等待期内忽略它
+                                            pendingPages = pages;
+                                            pageIndex = 1;             // 第一页马上推，后续页按上面排的 deadline
+                                            PushToDevice(pages[0]);
+                                            lastPushAt = DateTimeOffset.UtcNow;
+                                            Log?.Invoke($"[预推] {pages[0]}");
                                         }
                                     }
 

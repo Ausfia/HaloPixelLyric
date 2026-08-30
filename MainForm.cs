@@ -579,6 +579,16 @@ public sealed class MainForm : Form
 
     private void OnLog(string line)
     {
+        // 文件日志（排障用，exe 同目录 halolyric.log，超 2MB 轮转为 .old）
+        try
+        {
+            var path = System.IO.Path.Combine(AppContext.BaseDirectory, "halolyric.log");
+            var info = new System.IO.FileInfo(path);
+            if (info.Exists && info.Length > 2_000_000)
+                System.IO.File.Move(path, path + ".old", overwrite: true);
+            System.IO.File.AppendAllText(path, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {line}\r\n");
+        }
+        catch { }
         if (IsDisposed || !IsHandleCreated) return;
         BeginInvoke(() =>
         {

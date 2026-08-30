@@ -20,6 +20,10 @@ public sealed class DisplaySettings
     /// <summary>翻页提前量毫秒：抵消链路固有延迟（轮询+HID+固件动画），硬件动画时长有差异可调</summary>
     public int PageLeadMs { get; set; } = 280;
 
+    /// <summary>预推提前量毫秒：下一句第一页的独立提前量。锚点是 data-time 时间轴外推，
+    /// 相比翻页多一层"编排时间 vs 实际演唱"的系统偏差，通常需比翻页提前量略大</summary>
+    public int PrePushLeadMs { get; set; } = 350;
+
     /// <summary>间奏钳制倍数：官方句长超过估算值 N 倍判为间奏拉伸</summary>
     public double InterludeFactor { get; set; } = 3.0;
 

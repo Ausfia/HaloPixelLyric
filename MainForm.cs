@@ -37,9 +37,11 @@ public sealed class MainForm : Form
 
     // 参数页
     private readonly NumericUpDown _numLead = new();
+    private readonly NumericUpDown _numPre = new();
     private readonly NumericUpDown _numUnits = new();
     private readonly NumericUpDown _numInterlude = new();
     private readonly ModernSlider _sldLead = new();
+    private readonly ModernSlider _sldPre = new();
     private readonly ModernSlider _sldUnits = new();
     private readonly ModernSlider _sldInterlude = new();
     private bool _syncingSlider;
@@ -248,26 +250,29 @@ public sealed class MainForm : Form
         page.Controls.Add(PageTitle("控制台"));
 
         // 状态胶囊与启停按钮：同高同基线（48px）
+        // 注意：WinForms BackColor 不支持 alpha，半透明效果必须预混为实色（见 Blend）
         _statusPill.Size = new Size(300, 48);
         _statusPill.Location = new Point(24, 58);
-        _statusPill.BackColor = Color.FromArgb(50, Green.R, Green.G, Green.B);
+        _statusPill.BackColor = Blend(BaseBg, Green, 0.16);
         _statusPill.Paint += (_, e) =>
         {
             e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
             using var path = GraphicsExtensions.RoundedRect(0, 0, _statusPill.Width - 1, _statusPill.Height - 1, 16);
-            using var pen = new Pen(Color.FromArgb(90, Green.R, Green.G, Green.B));
+            using var pen = new Pen(Blend(BaseBg, _lblPillDot.ForeColor, 0.35));   // 跟随状态色
             e.Graphics.DrawPath(pen, path);
         };
         page.Controls.Add(_statusPill);
 
         _lblPillDot.Text = "●";
         _lblPillDot.AutoSize = true;
+        _lblPillDot.BackColor = Color.Transparent;
         _lblPillDot.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
         _lblPillDot.ForeColor = Green;
         _lblPillDot.Location = new Point(16, 15);
         _statusPill.Controls.Add(_lblPillDot);
 
         _lblPillText.AutoSize = true;
+        _lblPillText.BackColor = Color.Transparent;
         _lblPillText.Font = new Font("Microsoft YaHei UI", 9.5F);
         _lblPillText.ForeColor = TextMain;
         _lblPillText.Location = new Point(38, 15);
@@ -323,7 +328,7 @@ public sealed class MainForm : Form
 
         page.Controls.Add(PageTitle("显示参数"));
 
-        var card = MakeCard(page, 24, 66, 512, 320, "常用参数");
+        var card = MakeCard(page, 24, 66, 512, 376, "常用参数");
 
         var btnSave = RoundButton.Primary("保存参数", null, 9.5f);
         btnSave.Size = new Size(104, 32);
@@ -331,6 +336,7 @@ public sealed class MainForm : Form
         btnSave.Clicked += (_, _) =>
         {
             _service.Settings.PageLeadMs = (int)_numLead.Value;
+            _service.Settings.PrePushLeadMs = (int)_numPre.Value;
             _service.Settings.StaticMaxUnits = (double)_numUnits.Value;
             _service.Settings.InterludeFactor = (double)_numInterlude.Value;
             _service.Settings.Save();
@@ -339,16 +345,17 @@ public sealed class MainForm : Form
         card.Controls.Add(btnSave);
 
         AddSliderRow(card, 0, "翻页提前量", "毫秒", _sldLead, _numLead, 0, 1000, 10m, 0);
-        AddSliderRow(card, 1, "屏幕容量", "全角单位", _sldUnits, _numUnits, 8, 24, 0.5m, 1);
-        AddSliderRow(card, 2, "间奏钳制倍数", "倍", _sldInterlude, _numInterlude, 1.5m, 10, 0.5m, 1);
+        AddSliderRow(card, 1, "预推提前量", "毫秒", _sldPre, _numPre, 0, 1000, 10m, 0);
+        AddSliderRow(card, 2, "屏幕容量", "全角单位", _sldUnits, _numUnits, 8, 24, 0.5m, 1);
+        AddSliderRow(card, 3, "间奏钳制倍数", "倍", _sldInterlude, _numInterlude, 1.5m, 10, 0.5m, 1);
 
         var lblHint = new Label
         {
             AutoSize = true,
             ForeColor = TextDim,
             Font = new Font("Microsoft YaHei UI", 8.5F),
-            Text = "提前量：抢拍调小 / 慢拍调大（硬件动画差异）｜容量：中文 16 字 / 英文 32 字符",
-            Location = new Point(26, 398),
+            Text = "翻页：句内换页时机｜预推：每句第一屏时机（锚点含编排偏差，通常需略大）｜容量：中文 16 字 / 英文 32 字符",
+            Location = new Point(26, 454),
         };
         page.Controls.Add(lblHint);
 
@@ -548,6 +555,7 @@ public sealed class MainForm : Form
             ResumeLayout();
         }
         _numLead.Value = _service.Settings.PageLeadMs;
+        _numPre.Value = _service.Settings.PrePushLeadMs;
         _numUnits.Value = (decimal)_service.Settings.StaticMaxUnits;
         _numInterlude.Value = (decimal)_service.Settings.InterludeFactor;
     }
@@ -567,7 +575,7 @@ public sealed class MainForm : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
-        if (!_service.IsRunning) _service.Start();
+        // 默认不自动启动服务，由用户手动点击"启动"
     }
 
     private async Task<bool> AskRestart(string message)
@@ -611,12 +619,19 @@ public sealed class MainForm : Form
         BeginInvoke(UpdateStatus);
     }
 
+    /// <summary>半透明预混：WinForms BackColor 不支持 alpha，需把 overlay 按 alpha 混入 baseColor 得到实色。</summary>
+    private static Color Blend(Color baseColor, Color overlay, double alpha) =>
+        Color.FromArgb(
+            (int)(baseColor.R * (1 - alpha) + overlay.R * alpha),
+            (int)(baseColor.G * (1 - alpha) + overlay.G * alpha),
+            (int)(baseColor.B * (1 - alpha) + overlay.B * alpha));
+
     private void UpdateStatus()
     {
         var running = _service.IsRunning;
         _lblPillDot.ForeColor = running ? Green : Red;
         _lblPillText.Text = running ? "运行中" : "已停止";
-        _statusPill.BackColor = Color.FromArgb(50, running ? Green.R : Red.R, running ? Green.G : Red.G, running ? Green.B : Red.B);
+        _statusPill.BackColor = Blend(BaseBg, running ? Green : Red, 0.16);
         _btnToggle.SetDanger(running);
         _btnToggle.SetContent(running ? "停止" : "启动", running ? "■" : "▶");
         _tray.Text = running ? "HaloPixelLyric — 运行中" : "HaloPixelLyric — 已停止";

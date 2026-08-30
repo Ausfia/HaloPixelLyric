@@ -179,6 +179,7 @@ public sealed class LyricService
                     var lastSentence = string.Empty;
                     var lastAnchor = 0L;          // 最近一次句开始的墙钟锚（Unix ms）
                     var prePushedFrom = string.Empty;   // 预推发起时 current 停留的旧句（等待正式切换期间忽略它）
+                    var prePushStreak = 0;              // 预推连续命中计数（降噪统计用）
                     var lastPushAt = DateTimeOffset.MinValue;
                     List<string>? pendingPages = null;
                     var pageIndex = 0;
@@ -222,6 +223,12 @@ public sealed class LyricService
                                             lastSentence = trimmed;
                                             var anchorNow = changedAt > 0 ? changedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                                             lastAnchor = anchorNow;
+                                            if (prePushedFrom.Length > 0)
+                                            {
+                                                // 走到常规路径且此前有未命中的预推（切到了别的句/拖动）：报落空并重置统计
+                                                Log?.Invoke($"[预推落空] 已回退正式路径（连续命中 {prePushStreak} 句后中断）");
+                                                prePushStreak = 0;
+                                            }
                                             prePushedFrom = string.Empty;   // 常规新句处理：清除预推状态
                                             pendingPages = LyricLogic.SplitLyricPages(trimmed, Settings);
                                             pageIndex = 0;
@@ -256,11 +263,14 @@ public sealed class LyricService
                                     // ===== 预推命中检测 =====
                                     // 正式切换到了预推的句子（trimmed == lastSentence 不会触发上面的新句分支）：
                                     // 不重排不重推（第一页已在预推时上屏），仅用真实切换时刻更新锚点，供下一句预推更准。
+                                    // 命中不逐句打日志（太吵），连续命中每 20 句报一次统计。
                                     if (prePushedFrom.Length > 0 && sentence.Length > 0 && sentence == lastSentence)
                                     {
                                         prePushedFrom = string.Empty;
                                         if (changedAt > 0) lastAnchor = changedAt;
-                                        Log?.Invoke("[预推命中] 正式切换与预推一致");
+                                        prePushStreak++;
+                                        if (prePushStreak % 20 == 0)
+                                            Log?.Invoke($"[预推] 已连续命中 {prePushStreak} 句");
                                     }
 
                                     // ===== 下一句第一页预推 =====
@@ -272,7 +282,7 @@ public sealed class LyricService
                                     {
                                         var nextAt = lastAnchor + sentenceMs;
                                         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                        if (nowMs >= nextAt - Settings.PageLeadMs && nowMs <= nextAt + 1500)
+                                        if (nowMs >= nextAt - Settings.PrePushLeadMs && nowMs <= nextAt + 1500)
                                         {
                                             var pages = LyricLogic.SplitLyricPages(nextText, Settings);
                                             // 以预测时刻为基准排后续页（下一句时长未知，按字数估算）
@@ -284,11 +294,13 @@ public sealed class LyricService
                                             foreach (var pg in pages)
                                             {
                                                 acc += estimateMs * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
-                                                pageDeadlines.Add(nextAt + (long)acc - Settings.PageLeadMs);
+                                                pageDeadlines.Add(nextAt + (long)acc - Settings.PrePushLeadMs);
                                             }
                                             lastSentence = nextText;   // 正式切换到来时 trimmed==lastSentence，直接沿用此队列
                                             prePushedFrom = sentence;  // 记住发起预推时的旧句，等待期内忽略它
-                                            pendingPages = pages;
+                                            // 单页句没有后续页要管：队列直接置空，否则推页分支永远无法释放它，
+                                            // 导致下一句无法预推（交替跳句 bug）
+                                            pendingPages = pages.Count > 1 ? pages : null;
                                             pageIndex = 1;             // 第一页马上推，后续页按上面排的 deadline
                                             PushToDevice(pages[0]);
                                             lastPushAt = DateTimeOffset.UtcNow;
@@ -298,6 +310,13 @@ public sealed class LyricService
 
                                     if (pendingPages is not null)
                                     {
+                                        // 防御：页索引越界即视为本句播完，释放队列
+                                        if (pageIndex >= pendingPages.Count)
+                                        {
+                                            pendingPages = null;
+                                        }
+                                        else
+                                        {
                                         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                                         var due = pageIndex == 0
                                             || (pageIndex - 1 < pageDeadlines.Count && nowMs >= pageDeadlines[pageIndex - 1]);
@@ -313,11 +332,19 @@ public sealed class LyricService
                                             pageIndex++;
                                             if (pageIndex >= pendingPages.Count) pendingPages = null;
                                         }
+                                        }
                                     }
                                 }
                             }
+                            catch (OperationCanceledException) { break; }
                             catch (ObjectDisposedException) { break; }
-                            catch (Exception) { }
+                            catch (System.Net.WebSockets.WebSocketException) { /* 连接断开瞬态，由 Disconnected 驱动重连 */ }
+                            catch (System.Net.Http.HttpRequestException) { /* 同上 */ }
+                            catch (Exception ex)
+                            {
+                                // 程序错误必须暴露——曾经的裸吞把页索引越界埋成了"隔句跳"的隐性 bug
+                                Log?.Invoke($"[错误] 轮询未处理异常 {ex.GetType().Name}: {ex.Message}");
+                            }
                             try { await Task.Delay(60, sessionCts.Token); } catch (OperationCanceledException) { break; }
                         }
                     }, sessionCts.Token);
@@ -328,14 +355,15 @@ public sealed class LyricService
                     try { await pollTask; } catch { }
                     if (!ct.IsCancellationRequested)
                     {
-                        Log?.Invoke("[warn] CDP 连接断开，1 秒后重连...");
-                        await Task.Delay(1000, ct);
+                        // 网易云 CEF 有 ~31s 周期的 watchdog 踢调试连接，属不可抗力：
+                        // 立即重连（无固定等待），恢复窗口 ≈0.2s
+                        Log?.Invoke("[warn] CDP 被 watchdog 断开，立即重连...");
                     }
                 }
                 catch (Exception ex)
                 {
-                    Log?.Invoke($"[warn] CDP 异常: {ex.Message}，1 秒后重试...");
-                    await Task.Delay(1000, ct);
+                    Log?.Invoke($"[warn] CDP 异常: {ex.Message}，快速重试...");
+                    await Task.Delay(150, ct);   // 服务端释放旧连接的短窗口，快速退避
                 }
             }
         }

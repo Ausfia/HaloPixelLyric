@@ -1,0 +1,7 @@
+bin/
+obj/
+publish/
+*.log
+*.user
+.vs/
+.idea/

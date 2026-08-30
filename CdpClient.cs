@@ -132,10 +132,17 @@ public sealed class CdpClient : IDisposable
         }
     }
 
+    /// <summary>外部主动断开（服务停止时调用）：使 ReceiveLoop 结束、Disconnected 完成，
+    /// 让主循环能及时走到恢复时钟的收尾逻辑，而不是干等网易云关闭连接。</summary>
+    public void Abort()
+    {
+        try { _cts.Cancel(); } catch { }
+        try { _ws.Abort(); } catch { }
+    }
+
     public void Dispose()
     {
-        _cts.Cancel();
-        try { _ws.Abort(); } catch { }
+        Abort();
         _cts.Dispose();
     }
 }

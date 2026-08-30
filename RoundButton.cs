@@ -6,8 +6,8 @@ namespace HaloPixelLyric;
 /// </summary>
 public sealed class RoundButton : Control
 {
-    private readonly Color _fill, _text, _border;
-    private readonly string? _glyph;
+    private Color _fill, _text, _border;
+    private string? _glyph;
     private bool _hover, _pressed;
 
     public event EventHandler? Clicked;
@@ -54,8 +54,21 @@ public sealed class RoundButton : Control
                    ColorTranslator.FromHtml("#45475A"), glyph, fontSize);
     }
 
-    public void SetVariant(bool danger)
+    /// <summary>切换按钮文案与图标字形（运行态切换用）。</summary>
+    public void SetContent(string text, string? glyph)
     {
+        Text = text;
+        _glyph = glyph;
+        Invalidate();
+    }
+
+    /// <summary>切换配色变体：true=危险红（停止），false=成功绿（启动）。</summary>
+    public void SetDanger(bool danger)
+    {
+        var c = danger ? ColorTranslator.FromHtml("#F38BA8") : ColorTranslator.FromHtml("#A6E3A1");
+        _fill = Color.FromArgb(45, c.R, c.G, c.B);
+        _text = c;
+        _border = c;
         Invalidate();
     }
 
@@ -75,13 +88,17 @@ public sealed class RoundButton : Control
         g.DrawPath(pen, path);
 
         var textX = 0;
-        if (_glyph is not null && IconFactory.GlyphFont(12F) is { } gf)
+        if (_glyph is not null)
         {
+            // 私有区字形用 MDL2 图标字体；普通字符（■▶ 等）直接用按钮字体，避免缺字豆腐块
+            var useGlyphFont = _glyph.Any(ch => ch >= '\uE000' && ch <= '\uF8FF');
+            Font? gf = useGlyphFont ? IconFactory.GlyphFont(12F) : null;
+            var drawFont = gf ?? Font;
             using (gf)
             using (var tb = new SolidBrush(_text))
             {
-                var size = g.MeasureString(_glyph, gf);
-                g.DrawString(_glyph, gf, tb, 16, (Height - size.Height) / 2);
+                var size = g.MeasureString(_glyph, drawFont);
+                g.DrawString(_glyph, drawFont, tb, 16, (Height - size.Height) / 2);
                 textX = (int)size.Width + 4;
             }
         }

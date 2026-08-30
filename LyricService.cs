@@ -13,6 +13,7 @@ namespace HaloPixelLyric;
 public sealed class LyricService
 {
     private CancellationTokenSource? _cts;
+    private CdpClient? _activeCdp;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(3) };
 
     public DisplaySettings Settings { get; set; } = new();
@@ -42,6 +43,7 @@ public sealed class LyricService
     {
         if (!IsRunning) return;
         _cts?.Cancel();
+        _activeCdp?.Abort();   // 掐断当前 CDP 连接，让主循环立即走到恢复时钟的收尾
     }
 
     private static string? FindCloudMusicPath()
@@ -169,6 +171,7 @@ public sealed class LyricService
                     };
 
                     await cdp.ConnectAsync(wsUrl);
+                    _activeCdp = cdp;
                     await cdp.EnableRuntimeAsync();
                     await InjectAsync("启动");
 

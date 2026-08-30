@@ -247,9 +247,9 @@ public sealed class MainForm : Form
 
         page.Controls.Add(PageTitle("控制台"));
 
-        // 状态胶囊
-        _statusPill.Size = new Size(300, 36);
-        _statusPill.Location = new Point(24, 64);
+        // 状态胶囊与启停按钮：同高同基线（48px）
+        _statusPill.Size = new Size(300, 48);
+        _statusPill.Location = new Point(24, 58);
         _statusPill.BackColor = Color.FromArgb(50, Green.R, Green.G, Green.B);
         _statusPill.Paint += (_, e) =>
         {
@@ -264,17 +264,17 @@ public sealed class MainForm : Form
         _lblPillDot.AutoSize = true;
         _lblPillDot.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
         _lblPillDot.ForeColor = Green;
-        _lblPillDot.Location = new Point(16, 9);
+        _lblPillDot.Location = new Point(16, 15);
         _statusPill.Controls.Add(_lblPillDot);
 
         _lblPillText.AutoSize = true;
         _lblPillText.Font = new Font("Microsoft YaHei UI", 9.5F);
         _lblPillText.ForeColor = TextMain;
-        _lblPillText.Location = new Point(38, 9);
+        _lblPillText.Location = new Point(38, 15);
         _statusPill.Controls.Add(_lblPillText);
 
-        // 启停按钮
-        _btnToggle = RoundButton.Danger("停止", "\uE71A", 11.5f);
+        // 启停按钮（与胶囊同高 48、同基线 y=58）
+        _btnToggle = RoundButton.Danger("停止", "■", 11.5f);
         _btnToggle.Location = new Point(344, 58);
         _btnToggle.Size = new Size(192, 48);
         _btnToggle.Clicked += (_, _) => { if (_service.IsRunning) _service.Stop(); else _service.Start(); };
@@ -607,6 +607,8 @@ public sealed class MainForm : Form
         _lblPillDot.ForeColor = running ? Green : Red;
         _lblPillText.Text = running ? "运行中" : "已停止";
         _statusPill.BackColor = Color.FromArgb(50, running ? Green.R : Red.R, running ? Green.G : Red.G, running ? Green.B : Red.B);
+        _btnToggle.SetDanger(running);
+        _btnToggle.SetContent(running ? "停止" : "启动", running ? "■" : "▶");
         _tray.Text = running ? "HaloPixelLyric — 运行中" : "HaloPixelLyric — 已停止";
     }
 

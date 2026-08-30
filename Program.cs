@@ -23,8 +23,9 @@ static string TrimToByteBudget(string text, int maxBytes)
 
 // ---- 显示节奏参数（按体感可调） ----
 // 混合显示：屏幕放得下的句子居中静态；放不下的用滚动滚一遍看全句
-// 显示单位：全角字符=1，半角=0.5；≤StaticMaxUnits 判定为静态（实测屏宽 14 全角字）
-const double StaticMaxUnits = 14.0;
+// 显示单位：全角字符=1，半角=0.5；≤StaticMaxUnits 判定为静态
+// 实测屏宽：半角 32 字符（用户实测），全角 16 字（32×0.5），故取 16
+const double StaticMaxUnits = 16.0;
 // 静态句驻留：基础 + 每字符附加，上限
 const int BaseHoldMs = 1800;
 const int PerCharHoldMs = 80;
@@ -62,7 +63,17 @@ static List<string> SplitLyricPages(string text, double maxUnits)
     var remaining = text;
     while (DisplayUnits(remaining) > maxUnits && remaining.Length > 1)
     {
-        var targetChar = Math.Clamp((remaining.Length + 1) / 2, 1, (int)maxUnits);
+        // 本页从剩余文本开头实际能放下的字符数（全半角混合折算，半角=0.5单位）
+        var charsFit = 0;
+        double acc = 0;
+        foreach (var ch in remaining)
+        {
+            acc += ch >= 0x2E80 ? 1 : 0.5;
+            if (acc > maxUnits) break;
+            charsFit++;
+        }
+        if (charsFit < 1) charsFit = 1;
+        var targetChar = Math.Clamp((remaining.Length + 1) / 2, 1, charsFit);
         var best = -1;
         for (var offset = 0; offset <= 7 && best < 0; offset++)
         {
@@ -95,21 +106,38 @@ if (args.Length > 0 && args[0] == "--clock")
     return 0;
 }
 
-// 辅助模式：--calibrate 屏宽标定：依次显示 4~14 个汉字，用户记录最后一个完整显示的字数
+// 辅助模式：--calibrate 屏宽标定（默认汉字；--calibrate en 标定半角字符容量）
 if (args.Length > 0 && args[0] == "--calibrate")
 {
+    var english = args.Length > 1 && args[1].Equals("en", StringComparison.OrdinalIgnoreCase);
     var cal = new HaloPixelDevice();
     if (!cal.Initialize()) { Console.WriteLine("[错误] 未找到像素屏设备"); return 1; }
     cal.SetTextLayout(HaloPixelTextLayout.Center);
-    Console.WriteLine("屏宽标定：依次显示 4~14 个汉字（居中静态），每个停 3.5 秒。");
-    Console.WriteLine("请盯屏幕，记住「最后一个完整显示、没有被截断」的字数，之后告诉程序作者。");
-    for (var n = 4; n <= 14; n++)
+    if (english)
     {
-        var text = new string('测', n);
-        try { cal.ShowText(text); }
-        catch (Exception ex) { Console.WriteLine($"[warn] 发送失败: {ex.Message}"); }
-        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 屏幕上现在是 {n} 个汉字");
-        Thread.Sleep(3500);
+        Console.WriteLine("英文屏宽标定：依次显示 20~40 个小写字母（步进2），每个停 3.5 秒。");
+        Console.WriteLine("请盯屏幕，记住「最后一个完整显示、没有被截断」的字符数。");
+        for (var n = 20; n <= 40; n += 2)
+        {
+            var text = new string('n', n);
+            try { cal.ShowText(text); }
+            catch (Exception ex) { Console.WriteLine($"[warn] 发送失败: {ex.Message}"); }
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 屏幕上现在是 {n} 个半角字符");
+            Thread.Sleep(3500);
+        }
+    }
+    else
+    {
+        Console.WriteLine("屏宽标定：依次显示 4~14 个汉字（居中静态），每个停 3.5 秒。");
+        Console.WriteLine("请盯屏幕，记住「最后一个完整显示、没有被截断」的字数，之后告诉程序作者。");
+        for (var n = 4; n <= 14; n++)
+        {
+            var text = new string('测', n);
+            try { cal.ShowText(text); }
+            catch (Exception ex) { Console.WriteLine($"[warn] 发送失败: {ex.Message}"); }
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 屏幕上现在是 {n} 个汉字");
+            Thread.Sleep(3500);
+        }
     }
     Console.WriteLine("标定结束。");
     return 0;
@@ -214,13 +242,14 @@ while (!exit.IsSet)
         List<string>? pendingPages = null;    // 当前句的分页队列
         var pageIndex = 0;
         var pageDeadlines = new List<long>(); // 每页的切换时刻（Unix ms，基于网易云的本句开始时刻）
+        var pageMinHoldMs = 1200;             // 每页最小驻留（快节奏歌曲自动缩短）
 
         void PushToDevice(string text)
         {
             try
             {
                 device.SetTextLayout(HaloPixelTextLayout.Center);
-                device.ShowText(text);
+                device.ShowText(TrimToByteBudget(text, 55));   // 协议兜底：分页后每页 ≤48 字节，此处实际不触发
             }
             catch (Exception ex) { Console.WriteLine($"[warn] HID 写入失败: {ex.Message}"); }
         }
@@ -248,7 +277,7 @@ while (!exit.IsSet)
 
                         if (sentence.Length > 0)
                         {
-                            var trimmed = TrimToByteBudget(sentence, 55);
+                            var trimmed = sentence;   // 整句不预截断！截断必须在分页之后（每页天然 ≤16全角/32半角 = ≤48字节）
                             if (trimmed != lastSentence)
                             {
                                 // 新句：生成分页队列，并按演唱时长分配每页的切换时刻
@@ -262,6 +291,9 @@ while (!exit.IsSet)
                                 var totalUnits = DisplayUnits(trimmed);
                                 double acc = 0;
                                 pageDeadlines.Clear();
+                                // 快节奏歌曲：每页最小驻留 = 句长/页数，钳在 [600, 1200]
+                                pageMinHoldMs = (int)Math.Clamp(
+                                    sentenceMs > 0 ? sentenceMs / (double)pendingPages.Count : 1200.0, 600, 1200);
                                 foreach (var pg in pendingPages)
                                 {
                                     if (sentenceMs > 0 && totalUnits > 0)
@@ -281,9 +313,7 @@ while (!exit.IsSet)
                         var due = pageIndex == 0
                             || (pageIndex - 1 < pageDeadlines.Count && nowMs >= pageDeadlines[pageIndex - 1]);
                         var minHoldOk = lastPushAt == DateTimeOffset.MinValue
-                            || (DateTimeOffset.UtcNow - lastPushAt).TotalMilliseconds >= 1200;
-                        if (pageIndex == 0)
-                            Console.WriteLine($"[dbg] 页0待推 due={due} hold={minHoldOk} lastPushAt={(lastPushAt == DateTimeOffset.MinValue ? "never" : ((DateTimeOffset.UtcNow - lastPushAt).TotalMilliseconds).ToString("0") + "ms前")}");
+                            || (DateTimeOffset.UtcNow - lastPushAt).TotalMilliseconds >= pageMinHoldMs;
                         if (due && minHoldOk)
                         {
                             var page = pendingPages[pageIndex];

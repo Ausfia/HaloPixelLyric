@@ -1,15 +1,15 @@
-using System.Globalization;
+using System.Diagnostics;
 
 namespace HaloPixelLyric;
 
 /// <summary>
-/// 主界面（深色主题）：头部品牌区、状态胶囊、启停按钮、滑块式参数卡（滑块+精确输入双向绑定）、
-/// 日志控制台、系统托盘。布局按 96DPI 设计，OnLoad 按真实 DPI 统一缩放。
-/// 配色：Catppuccin Mocha。
+/// 主界面（产品形态）：左侧导航栏（控制台/显示参数/运行日志/关于）+ 右侧分页内容区。
+/// 深色主题（Catppuccin Mocha），自绘图标与圆角按钮，布局按 96DPI 设计、OnLoad 按真实 DPI 缩放。
 /// </summary>
 public sealed class MainForm : Form
 {
     private static readonly Color BaseBg = ColorTranslator.FromHtml("#1E1E2E");
+    private static readonly Color RailBg = ColorTranslator.FromHtml("#181825");
     private static readonly Color CardBg = ColorTranslator.FromHtml("#181825");
     private static readonly Color FieldBg = ColorTranslator.FromHtml("#313244");
     private static readonly Color Border = ColorTranslator.FromHtml("#45475A");
@@ -19,17 +19,23 @@ public sealed class MainForm : Form
     private static readonly Color Green = ColorTranslator.FromHtml("#A6E3A1");
     private static readonly Color Red = ColorTranslator.FromHtml("#F38BA8");
     private static readonly Color LogBg = ColorTranslator.FromHtml("#11111B");
+    private static readonly Color NavHover = ColorTranslator.FromHtml("#24253A");
+    private static readonly Color NavActive = ColorTranslator.FromHtml("#2A2B44");
 
     private readonly LyricService _service = new() { Settings = DisplaySettings.Load() };
     private readonly NotifyIcon _tray;
-    private readonly Label _lblTitle = new();
-    private readonly Label _lblSubtitle = new();
+
+    private readonly List<(Panel Nav, Panel AccentBar, Panel Page)> _nav = [];
+    private Panel _content = null!;
+
+    // 控制台页
     private readonly Panel _statusPill = new();
     private readonly Label _lblPillDot = new();
     private readonly Label _lblPillText = new();
-    private readonly Button _btnToggle = new();
-    private readonly TextBox _txtLog = new();
+    private RoundButton _btnToggle = null!;
+    private readonly Label _lblLyric = new();
 
+    // 参数页
     private readonly NumericUpDown _numLead = new();
     private readonly NumericUpDown _numUnits = new();
     private readonly NumericUpDown _numInterlude = new();
@@ -38,131 +44,28 @@ public sealed class MainForm : Form
     private readonly ModernSlider _sldInterlude = new();
     private bool _syncingSlider;
 
+    // 日志页
+    private readonly TextBox _txtLog = new();
+
     public MainForm()
     {
         Text = "HaloPixelLyric";
         Font = new Font("Microsoft YaHei UI", 9.5F);
-        // 布局按 96DPI 设计；OnLoad 按 DeviceDpi/96 手动统一缩放（WinForms 自动缩放在高 DPI 不可靠）
         AutoScaleMode = AutoScaleMode.None;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
         StartPosition = FormStartPosition.CenterScreen;
-        ClientSize = new Size(620, 740);
+        ClientSize = new Size(760, 580);
         BackColor = BaseBg;
+        Icon = IconFactory.CreateAppIcon();
 
-        // ===== 头部品牌区 =====
-        _lblTitle.Text = "HaloPixelLyric";
-        _lblTitle.AutoSize = true;
-        _lblTitle.Font = new Font("Microsoft YaHei UI", 16F, FontStyle.Bold);
-        _lblTitle.ForeColor = TextMain;
-        _lblTitle.Location = new Point(24, 18);
-        Controls.Add(_lblTitle);
+        BuildRail();
+        BuildContent();
+        SelectPage(0);
 
-        _lblSubtitle.Text = "网易云音乐歌词 → 花再 Halo PixelBar 像素屏";
-        _lblSubtitle.AutoSize = true;
-        _lblSubtitle.Font = new Font("Microsoft YaHei UI", 9F);
-        _lblSubtitle.ForeColor = TextDim;
-        _lblSubtitle.Location = new Point(26, 58);
-        Controls.Add(_lblSubtitle);
-
-        _btnToggle.Size = new Size(140, 46);
-        _btnToggle.Location = new Point(ClientSize.Width - _btnToggle.Width - 24, 28);
-        _btnToggle.Text = "停止";
-        _btnToggle.FlatStyle = FlatStyle.Flat;
-        _btnToggle.Font = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
-        _btnToggle.Cursor = Cursors.Hand;
-        _btnToggle.Click += (_, _) => { if (_service.IsRunning) _service.Stop(); else _service.Start(); };
-        Controls.Add(_btnToggle);
-
-        // ===== 状态胶囊 =====
-        _statusPill.Size = new Size(280, 34);
-        _statusPill.Location = new Point(24, 100);
-        _statusPill.BackColor = Color.FromArgb(50, Green.R, Green.G, Green.B);
-        _statusPill.Paint += (_, e) =>
-        {
-            using var path = GraphicsExtensions.RoundedRect(0, 0, _statusPill.Width - 1, _statusPill.Height - 1, 15);
-            using var pen = new Pen(Color.FromArgb(90, Green.R, Green.G, Green.B));
-            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
-            e.Graphics.DrawPath(pen, path);
-        };
-        Controls.Add(_statusPill);
-
-        _lblPillDot.Text = "●";
-        _lblPillDot.AutoSize = true;
-        _lblPillDot.Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold);
-        _lblPillDot.ForeColor = Green;
-        _lblPillDot.Location = new Point(14, 8);
-        _statusPill.Controls.Add(_lblPillDot);
-
-        _lblPillText.AutoSize = true;
-        _lblPillText.Font = new Font("Microsoft YaHei UI", 9F);
-        _lblPillText.ForeColor = TextMain;
-        _lblPillText.Location = new Point(32, 8);
-        _statusPill.Controls.Add(_lblPillText);
-
-        // ===== 参数卡片（滑块式） =====
-        var cardParams = MakeCard(24, 152, ClientSize.Width - 48, 306, "显示参数");
-
-        var btnSave = new Button
-        {
-            Text = "保存参数",
-            Size = new Size(92, 30),
-            Location = new Point(cardParams.Width - 92 - 14, 11),
-            FlatStyle = FlatStyle.Flat,
-            BackColor = Color.FromArgb(45, Accent.R, Accent.G, Accent.B),
-            ForeColor = Accent,
-            Font = new Font("Microsoft YaHei UI", 9F, FontStyle.Bold),
-            Cursor = Cursors.Hand,
-        };
-        btnSave.FlatAppearance.BorderColor = Accent;
-        btnSave.FlatAppearance.MouseOverBackColor = Color.FromArgb(80, Accent.R, Accent.G, Accent.B);
-        btnSave.Click += (_, _) =>
-        {
-            _service.Settings.PageLeadMs = (int)_numLead.Value;
-            _service.Settings.StaticMaxUnits = (double)_numUnits.Value;
-            _service.Settings.InterludeFactor = (double)_numInterlude.Value;
-            _service.Settings.Save();
-            Log("[ok] 参数已保存，对新歌词立即生效");
-        };
-        cardParams.Controls.Add(btnSave);
-
-        // 每行：名称 + 数值输入（右）；滑块占满整行
-        AddSliderRow(cardParams, 0, "翻页提前量", "毫秒", _sldLead, _numLead,
-            0, 1000, 10m, 0, v => (object)(int)v);
-        AddSliderRow(cardParams, 1, "屏幕容量", "全角单位", _sldUnits, _numUnits,
-            8, 24, 0.5m, 1, v => (object)(double)v);
-        AddSliderRow(cardParams, 2, "间奏钳制倍数", "倍", _sldInterlude, _numInterlude,
-            1.5m, 10, 0.5m, 1, v => (object)(double)v);
-
-        var lblHint = new Label
-        {
-            AutoSize = true,
-            ForeColor = TextDim,
-            Font = new Font("Microsoft YaHei UI", 8.5F),
-            Text = "提前量：抢拍调小 / 慢拍调大（硬件动画差异）｜容量：中文 16 字 / 英文 32 字符",
-            Location = new Point(26, 470),
-        };
-        Controls.Add(lblHint);
-
-        // ===== 日志卡片 =====
-        var cardLog = MakeCard(24, 498, ClientSize.Width - 48, ClientSize.Height - 498 - 24, "运行日志");
-
-        _txtLog.Multiline = true;
-        _txtLog.ReadOnly = true;
-        _txtLog.ScrollBars = ScrollBars.Vertical;
-        _txtLog.BackColor = LogBg;
-        _txtLog.ForeColor = TextMain;
-        _txtLog.BorderStyle = BorderStyle.None;
-        _txtLog.Font = new Font("Consolas", 9F);
-        _txtLog.Location = new Point(14, 40);
-        _txtLog.Size = new Size(cardLog.Width - 28, cardLog.Height - 40 - 14);
-        _txtLog.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Bottom;
-        cardLog.Controls.Add(_txtLog);
-
-        // ===== 托盘 =====
         _tray = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = IconFactory.CreateAppIcon(),
             Text = "HaloPixelLyric",
             Visible = true,
             ContextMenuStrip = BuildTrayMenu(),
@@ -172,39 +75,157 @@ public sealed class MainForm : Form
         _service.Log += OnLog;
         _service.RunningChanged += OnRunningChanged;
         _service.ConfirmRestart += AskRestart;
+        _service.LyricPushed += OnLyricPushed;
 
         UpdateStatus();
     }
 
-    private ContextMenuStrip BuildTrayMenu()
-    {
-        var menu = new ContextMenuStrip { BackColor = CardBg, ForeColor = TextMain, ShowImageMargin = false };
-        var itemShow = new ToolStripMenuItem("显示主界面") { ForeColor = TextMain, BackColor = CardBg };
-        itemShow.Click += (_, _) => ShowFromTray();
-        var itemToggle = new ToolStripMenuItem("停止 / 启动") { ForeColor = TextMain, BackColor = CardBg };
-        itemToggle.Click += (_, _) => { if (_service.IsRunning) _service.Stop(); else _service.Start(); };
-        var itemExit = new ToolStripMenuItem("退出") { ForeColor = Red, BackColor = CardBg };
-        itemExit.Click += (_, _) => ExitApp();
-        menu.Items.Add(itemShow);
-        menu.Items.Add(itemToggle);
-        menu.Items.Add(new ToolStripSeparator { BackColor = Border });
-        menu.Items.Add(itemExit);
-        return menu;
-    }
+    // ================= 左侧导航栏 =================
 
-    /// <summary>深色卡片：自绘边框面板 + 左上标题。</summary>
-    private Panel MakeCard(int x, int y, int w, int h, string title)
+    private void BuildRail()
     {
-        var card = new Panel
-        {
-            Location = new Point(x, y),
-            Size = new Size(w, h),
-            BackColor = CardBg,
-        };
-        card.Paint += (_, e) =>
+        var rail = new Panel { Location = new Point(0, 0), Size = new Size(200, 580), BackColor = RailBg };
+        rail.Paint += (_, e) =>
         {
             using var pen = new Pen(Border);
-            e.Graphics.DrawRectangle(pen, 0, 0, card.Width - 1, card.Height - 1);
+            e.Graphics.DrawLine(pen, rail.Width - 1, 0, rail.Width - 1, rail.Height);
+        };
+        Controls.Add(rail);
+
+        var pic = new PictureBox
+        {
+            Image = IconFactory.CreateAppBitmap(),
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Location = new Point(20, 18),
+            Size = new Size(40, 40),
+            BackColor = Color.Transparent,
+        };
+        rail.Controls.Add(pic);
+
+        var lblName = new Label
+        {
+            Text = "HaloPixelLyric",
+            AutoSize = true,
+            Font = new Font("Microsoft YaHei UI", 11.5F, FontStyle.Bold),
+            ForeColor = TextMain,
+            Location = new Point(68, 26),
+        };
+        rail.Controls.Add(lblName);
+
+        AddNavItem(rail, 0, "控制台", "\uE80F");
+        AddNavItem(rail, 1, "显示参数", "\uE713");
+        AddNavItem(rail, 2, "运行日志", "\uE8D6");
+        AddNavItem(rail, 3, "关于", "\uE946");
+
+        var lblHint = new Label
+        {
+            AutoSize = true,
+            Text = "双击托盘图标显示窗口",
+            Font = new Font("Microsoft YaHei UI", 8F),
+            ForeColor = Color.FromArgb(90, TextDim),
+            Location = new Point(20, rail.Height - 36),
+        };
+        rail.Controls.Add(lblHint);
+    }
+
+    private void AddNavItem(Panel rail, int index, string text, string glyph)
+    {
+        var nav = new Panel
+        {
+            Location = new Point(0, 84 + index * 48),
+            Size = new Size(200, 44),
+            BackColor = Color.Transparent,
+            Cursor = Cursors.Hand,
+            Tag = index,
+        };
+        var bar = new Panel { Location = new Point(0, 6), Size = new Size(3, 32), BackColor = Accent, Visible = false };
+        nav.Controls.Add(bar);
+
+        var lblGlyph = new Label
+        {
+            Text = glyph,
+            AutoSize = true,
+            ForeColor = TextDim,
+            Location = new Point(18, 12),
+            BackColor = Color.Transparent,
+        };
+        if (IconFactory.GlyphFont(11F) is { } gf) lblGlyph.Font = gf;
+        else lblGlyph.Text = "·";
+        nav.Controls.Add(lblGlyph);
+
+        var lblText = new Label
+        {
+            Text = text,
+            AutoSize = true,
+            ForeColor = TextMain,
+            Location = new Point(48, 13),
+            BackColor = Color.Transparent,
+        };
+        nav.Controls.Add(lblText);
+
+        var hover = false;
+        void PaintState()
+        {
+            if (nav.BackColor == NavActive) return;
+            nav.BackColor = hover ? NavHover : Color.Transparent;
+        }
+        nav.MouseEnter += (_, _) => { hover = true; PaintState(); };
+        nav.MouseLeave += (_, _) => { hover = false; PaintState(); };
+        nav.Click += (_, _) => SelectPage(index);
+        // 子控件点击同样触发
+        lblGlyph.Click += (_, _) => SelectPage(index);
+        lblText.Click += (_, _) => SelectPage(index);
+        lblGlyph.MouseEnter += (_, _) => { hover = true; PaintState(); };
+        lblGlyph.MouseLeave += (_, _) => { hover = false; PaintState(); };
+        lblText.MouseEnter += (_, _) => { hover = true; PaintState(); };
+        lblText.MouseLeave += (_, _) => { hover = false; PaintState(); };
+
+        rail.Controls.Add(nav);
+        _nav.Add((nav, bar, null!));
+    }
+
+    private void SelectPage(int index)
+    {
+        for (var i = 0; i < _nav.Count; i++)
+        {
+            var (nav, bar, page) = _nav[i];
+            var active = i == index;
+            bar.Visible = active;
+            nav.BackColor = active ? NavActive : Color.Transparent;
+            if (page is not null) page.Visible = active;
+        }
+    }
+
+    // ================= 内容区 =================
+
+    private void BuildContent()
+    {
+        _content = new Panel { Location = new Point(200, 0), Size = new Size(560, 580), BackColor = BaseBg };
+        Controls.Add(_content);
+
+        var pages = new[] { BuildServicePage(), BuildParamsPage(), BuildLogPage(), BuildAboutPage() };
+        for (var i = 0; i < pages.Length; i++)
+            _nav[i] = (_nav[i].Nav, _nav[i].AccentBar, pages[i]);
+    }
+
+    private Label PageTitle(string text, int x = 24, int y = 20) => new()
+    {
+        Text = text,
+        AutoSize = true,
+        Font = new Font("Microsoft YaHei UI", 14F, FontStyle.Bold),
+        ForeColor = TextMain,
+        Location = new Point(x, y),
+    };
+
+    private Panel MakeCard(Control parent, int x, int y, int w, int h, string title)
+    {
+        var card = new Panel { Location = new Point(x, y), Size = new Size(w, h), BackColor = CardBg };
+        card.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = GraphicsExtensions.RoundedRect(0, 0, card.Width - 1, card.Height - 1, 10);
+            using var pen = new Pen(Border);
+            e.Graphics.DrawPath(pen, path);
         };
         var lbl = new Label
         {
@@ -215,20 +236,131 @@ public sealed class MainForm : Form
             Location = new Point(14, 12),
         };
         card.Controls.Add(lbl);
-        Controls.Add(card);
+        parent.Controls.Add(card);
         return card;
     }
 
-    /// <summary>
-    /// 滑块参数行：第一行为「名称 + 数值输入 + 单位」，第二行为整行滑块；滑块与输入框双向绑定。
-    /// </summary>
+    private Panel BuildServicePage()
+    {
+        var page = new Panel { Location = new Point(0, 0), Size = _content.Size, BackColor = BaseBg };
+        _content.Controls.Add(page);
+
+        page.Controls.Add(PageTitle("控制台"));
+
+        // 状态胶囊
+        _statusPill.Size = new Size(300, 36);
+        _statusPill.Location = new Point(24, 64);
+        _statusPill.BackColor = Color.FromArgb(50, Green.R, Green.G, Green.B);
+        _statusPill.Paint += (_, e) =>
+        {
+            e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+            using var path = GraphicsExtensions.RoundedRect(0, 0, _statusPill.Width - 1, _statusPill.Height - 1, 16);
+            using var pen = new Pen(Color.FromArgb(90, Green.R, Green.G, Green.B));
+            e.Graphics.DrawPath(pen, path);
+        };
+        page.Controls.Add(_statusPill);
+
+        _lblPillDot.Text = "●";
+        _lblPillDot.AutoSize = true;
+        _lblPillDot.Font = new Font("Microsoft YaHei UI", 10F, FontStyle.Bold);
+        _lblPillDot.ForeColor = Green;
+        _lblPillDot.Location = new Point(16, 9);
+        _statusPill.Controls.Add(_lblPillDot);
+
+        _lblPillText.AutoSize = true;
+        _lblPillText.Font = new Font("Microsoft YaHei UI", 9.5F);
+        _lblPillText.ForeColor = TextMain;
+        _lblPillText.Location = new Point(38, 9);
+        _statusPill.Controls.Add(_lblPillText);
+
+        // 启停按钮
+        _btnToggle = RoundButton.Danger("停止", "\uE71A", 11.5f);
+        _btnToggle.Location = new Point(344, 58);
+        _btnToggle.Size = new Size(192, 48);
+        _btnToggle.Clicked += (_, _) => { if (_service.IsRunning) _service.Stop(); else _service.Start(); };
+        page.Controls.Add(_btnToggle);
+
+        // 当前歌词卡片
+        var lyricCard = MakeCard(page, 24, 130, 512, 180, "当前歌词");
+        _lblLyric.Text = "等待播放…";
+        _lblLyric.AutoSize = false;
+        _lblLyric.TextAlign = ContentAlignment.MiddleCenter;
+        _lblLyric.Font = new Font("Microsoft YaHei UI", 15F, FontStyle.Bold);
+        _lblLyric.ForeColor = TextMain;
+        _lblLyric.BackColor = Color.Transparent;
+        _lblLyric.Location = new Point(16, 40);
+        _lblLyric.Size = new Size(lyricCard.Width - 32, 96);
+        lyricCard.Controls.Add(_lblLyric);
+
+        var lblLyricHint = new Label
+        {
+            AutoSize = true,
+            Text = "像素屏上的内容与此处实时同步",
+            ForeColor = TextDim,
+            Font = new Font("Microsoft YaHei UI", 8.5F),
+            Location = new Point(16, lyricCard.Height - 28),
+        };
+        lyricCard.Controls.Add(lblLyricHint);
+
+        // 设备信息
+        var lblDevice = new Label
+        {
+            AutoSize = true,
+            Text = "设备：花再 Halo PixelBar（USB HID）｜ 通道：CDP :9222 ｜ 播放器：网易云音乐",
+            ForeColor = TextDim,
+            Font = new Font("Microsoft YaHei UI", 8.5F),
+            Location = new Point(26, 326),
+        };
+        page.Controls.Add(lblDevice);
+
+        return page;
+    }
+
+    private Panel BuildParamsPage()
+    {
+        var page = new Panel { Location = new Point(0, 0), Size = _content.Size, BackColor = BaseBg };
+        _content.Controls.Add(page);
+
+        page.Controls.Add(PageTitle("显示参数"));
+
+        var card = MakeCard(page, 24, 66, 512, 320, "常用参数");
+
+        var btnSave = RoundButton.Primary("保存参数", null, 9.5f);
+        btnSave.Size = new Size(104, 32);
+        btnSave.Location = new Point(card.Width - 104 - 14, 10);
+        btnSave.Clicked += (_, _) =>
+        {
+            _service.Settings.PageLeadMs = (int)_numLead.Value;
+            _service.Settings.StaticMaxUnits = (double)_numUnits.Value;
+            _service.Settings.InterludeFactor = (double)_numInterlude.Value;
+            _service.Settings.Save();
+            Log("[ok] 参数已保存，对新歌词立即生效");
+        };
+        card.Controls.Add(btnSave);
+
+        AddSliderRow(card, 0, "翻页提前量", "毫秒", _sldLead, _numLead, 0, 1000, 10m, 0);
+        AddSliderRow(card, 1, "屏幕容量", "全角单位", _sldUnits, _numUnits, 8, 24, 0.5m, 1);
+        AddSliderRow(card, 2, "间奏钳制倍数", "倍", _sldInterlude, _numInterlude, 1.5m, 10, 0.5m, 1);
+
+        var lblHint = new Label
+        {
+            AutoSize = true,
+            ForeColor = TextDim,
+            Font = new Font("Microsoft YaHei UI", 8.5F),
+            Text = "提前量：抢拍调小 / 慢拍调大（硬件动画差异）｜容量：中文 16 字 / 英文 32 字符",
+            Location = new Point(26, 398),
+        };
+        page.Controls.Add(lblHint);
+
+        return page;
+    }
+
     private void AddSliderRow(Control card, int row, string name, string unit,
         ModernSlider slider, NumericUpDown num,
-        decimal min, decimal max, decimal step, int decimals,
-        Func<decimal, object> toSetting)
+        decimal min, decimal max, decimal step, int decimals)
     {
         const int rowH = 78;
-        var top = 50 + row * rowH;
+        var top = 52 + row * rowH;
 
         var lbl = new Label
         {
@@ -250,7 +382,6 @@ public sealed class MainForm : Form
         num.Font = new Font("Consolas", 10F);
         num.TextAlign = HorizontalAlignment.Center;
         num.Width = 84;
-        // 隐藏原生上下箭头，视觉更干净（拖滑块或直接键入皆可）
         if (num.Controls.Count > 0) num.Controls[0].Visible = false;
         num.Location = new Point(card.Width - 170, top);
         num.Anchor = AnchorStyles.Top | AnchorStyles.Right;
@@ -276,7 +407,6 @@ public sealed class MainForm : Form
         slider.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
         card.Controls.Add(slider);
 
-        // 双向绑定（带环路保护）
         slider.ValueChanged += (_, _) =>
         {
             if (_syncingSlider) return;
@@ -293,6 +423,119 @@ public sealed class MainForm : Form
         };
     }
 
+    private Panel BuildLogPage()
+    {
+        var page = new Panel { Location = new Point(0, 0), Size = _content.Size, BackColor = BaseBg };
+        _content.Controls.Add(page);
+
+        page.Controls.Add(PageTitle("运行日志"));
+
+        var btnClear = RoundButton.Ghost("清空日志", null, 9f);
+        btnClear.Size = new Size(100, 30);
+        btnClear.Location = new Point(_content.Width - 100 - 24, 18);
+        btnClear.Clicked += (_, _) => _txtLog.Clear();
+        page.Controls.Add(btnClear);
+
+        var card = MakeCard(page, 24, 66, 512, 480, "");
+        _txtLog.Multiline = true;
+        _txtLog.ReadOnly = true;
+        _txtLog.ScrollBars = ScrollBars.Vertical;
+        _txtLog.BackColor = LogBg;
+        _txtLog.ForeColor = TextMain;
+        _txtLog.BorderStyle = BorderStyle.None;
+        _txtLog.Font = new Font("Consolas", 9F);
+        _txtLog.Location = new Point(14, 14);
+        _txtLog.Size = new Size(card.Width - 28, card.Height - 28);
+        card.Controls.Add(_txtLog);
+
+        return page;
+    }
+
+    private Panel BuildAboutPage()
+    {
+        var page = new Panel { Location = new Point(0, 0), Size = _content.Size, BackColor = BaseBg };
+        _content.Controls.Add(page);
+
+        page.Controls.Add(PageTitle("关于"));
+
+        var card = MakeCard(page, 24, 66, 512, 220, "");
+        var pic = new PictureBox
+        {
+            Image = IconFactory.CreateAppBitmap(),
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Location = new Point(20, 24),
+            Size = new Size(56, 56),
+            BackColor = Color.Transparent,
+        };
+        card.Controls.Add(pic);
+
+        var lblName = new Label
+        {
+            Text = "HaloPixelLyric",
+            AutoSize = true,
+            Font = new Font("Microsoft YaHei UI", 13F, FontStyle.Bold),
+            ForeColor = TextMain,
+            Location = new Point(92, 28),
+        };
+        card.Controls.Add(lblName);
+
+        var lblVer = new Label
+        {
+            Text = "版本 1.1.0 ｜ 完全 vibe coding 产物（GLM-5.3 协作完成）",
+            AutoSize = true,
+            Font = new Font("Microsoft YaHei UI", 8.5F),
+            ForeColor = TextDim,
+            Location = new Point(92, 60),
+        };
+        card.Controls.Add(lblVer);
+
+        var lblDesc = new Label
+        {
+            Text = "把网易云音乐正在显示的歌词行实时推送到花再 Halo PixelBar 像素屏。\r\n\r\n通过 CEF 标准调试接口（CDP）读取网页层歌词，\r\n不注入 DLL、不读写进程内存、不依赖网易云版本偏移。",
+            AutoSize = true,
+            Font = new Font("Microsoft YaHei UI", 9F),
+            ForeColor = TextMain,
+            Location = new Point(20, 96),
+            MaximumSize = new Size(470, 0),
+        };
+        card.Controls.Add(lblDesc);
+
+        var btnGh = RoundButton.Primary("在 GitHub 上查看", null, 9.5f);
+        btnGh.Size = new Size(160, 34);
+        btnGh.Location = new Point(20, 170);
+        btnGh.Clicked += (_, _) =>
+            Process.Start(new ProcessStartInfo("https://github.com/Ausfia/HaloPixelLyric") { UseShellExecute = true });
+        card.Controls.Add(btnGh);
+
+        var lblCredit = new Label
+        {
+            Text = "Hid 通信层源自 HaloPixelToolBox（MIT）｜协议参考 halo-pixelbar-mcp（MIT）｜仅供学习研究",
+            AutoSize = true,
+            ForeColor = TextDim,
+            Font = new Font("Microsoft YaHei UI", 8F),
+            Location = new Point(26, 300),
+        };
+        page.Controls.Add(lblCredit);
+
+        return page;
+    }
+
+    private ContextMenuStrip BuildTrayMenu()
+    {
+        var menu = new ContextMenuStrip { BackColor = CardBg, ForeColor = TextMain, ShowImageMargin = false };
+        var itemShow = new ToolStripMenuItem("显示主界面") { ForeColor = TextMain, BackColor = CardBg };
+        itemShow.Click += (_, _) => ShowFromTray();
+        var itemToggle = new ToolStripMenuItem("停止 / 启动") { ForeColor = TextMain, BackColor = CardBg };
+        itemToggle.Click += (_, _) => { if (_service.IsRunning) _service.Stop(); else _service.Start(); };
+        var itemExit = new ToolStripMenuItem("退出") { ForeColor = Red, BackColor = CardBg };
+        itemExit.Click += (_, _) => ExitApp();
+        menu.Items.Add(itemShow);
+        menu.Items.Add(itemToggle);
+        menu.Items.Add(new ToolStripSeparator { BackColor = Border });
+        menu.Items.Add(itemExit);
+        return menu;
+    }
+
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
@@ -301,7 +544,7 @@ public sealed class MainForm : Form
         {
             SuspendLayout();
             ApplyDpiScale(this, scale);
-            ClientSize = new Size((int)(620 * scale), (int)(740 * scale));
+            ClientSize = new Size((int)(760 * scale), (int)(580 * scale));
             ResumeLayout();
         }
         _numLead.Value = _service.Settings.PageLeadMs;
@@ -309,7 +552,6 @@ public sealed class MainForm : Form
         _numInterlude.Value = (decimal)_service.Settings.InterludeFactor;
     }
 
-    /// <summary>递归缩放控件树的位置与尺寸（字体由系统按 DPI 渲染，无需干预）。</summary>
     private static void ApplyDpiScale(Control root, float scale)
     {
         foreach (Control c in root.Controls)
@@ -347,6 +589,12 @@ public sealed class MainForm : Form
 
     private void Log(string line) => OnLog(line);
 
+    private void OnLyricPushed(string lyric)
+    {
+        if (IsDisposed || !IsHandleCreated) return;
+        BeginInvoke(() => _lblLyric.Text = lyric.Length > 40 ? lyric[..40] + "…" : lyric);
+    }
+
     private void OnRunningChanged()
     {
         if (IsDisposed || !IsHandleCreated) return;
@@ -357,12 +605,8 @@ public sealed class MainForm : Form
     {
         var running = _service.IsRunning;
         _lblPillDot.ForeColor = running ? Green : Red;
-        _lblPillText.Text = running ? "运行中 · 关闭窗口最小化到托盘" : "已停止";
+        _lblPillText.Text = running ? "运行中" : "已停止";
         _statusPill.BackColor = Color.FromArgb(50, running ? Green.R : Red.R, running ? Green.G : Red.G, running ? Green.B : Red.B);
-        _btnToggle.Text = running ? "停止" : "启动";
-        _btnToggle.ForeColor = running ? Red : Green;
-        _btnToggle.FlatAppearance.BorderColor = running ? Red : Green;
-        _btnToggle.BackColor = Color.FromArgb(40, running ? Red.R : Green.R, running ? Red.G : Green.G, running ? Red.B : Green.B);
         _tray.Text = running ? "HaloPixelLyric — 运行中" : "HaloPixelLyric — 已停止";
     }
 

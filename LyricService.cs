@@ -21,6 +21,9 @@ public sealed class LyricService
     /// <summary>日志行（含歌词推送与诊断信息）</summary>
     public event Action<string>? Log;
 
+    /// <summary>当前推上像素屏的歌词行（控制台页大字展示用）</summary>
+    public event Action<string>? LyricPushed;
+
     /// <summary>运行状态变化</summary>
     public event Action? RunningChanged;
 
@@ -292,6 +295,7 @@ public sealed class LyricService
             {
                 device.SetTextLayout(HaloPixelTextLayout.Center);
                 device.ShowText(LyricLogic.TrimToByteBudget(text, 55));
+                LyricPushed?.Invoke(text);
             }
             catch (Exception ex) { Log?.Invoke($"[warn] HID 写入失败: {ex.Message}"); }
         }

@@ -124,9 +124,11 @@ public sealed class CdpClient : IDisposable
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception)
+        catch (Exception ex)
         {
-            // 连接断开由 Disconnected 任务本身通知主循环重连
+            // 记录断开细节便于诊断（页面导航重建 / 被其他客户端顶替 / 网易云退出）
+            var closeStatus = _ws.CloseStatus?.ToString() ?? "abnormal";
+            Console.WriteLine($"[dbg-cdp] 连接结束: {ex.GetType().Name} closeStatus={closeStatus}");
         }
     }
 

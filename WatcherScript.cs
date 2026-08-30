@@ -13,7 +13,7 @@ public static class WatcherScript
 {
     public const string Code = """
         (function () {
-            if (window.__haloLyric && window.__haloLyric.v === 5) { return 'alive'; }
+            if (window.__haloLyric && window.__haloLyric.v === 6) { return 'alive'; }
             if (window.__haloLyricTimer) { try { clearInterval(window.__haloLyricTimer); } catch (e) { } }
             var state = { observer: null, lastTime: null };
 
@@ -55,8 +55,8 @@ public static class WatcherScript
                 return true;
             }
 
-            window.__haloLyric = { v: 5, current: null, sentenceMs: 0, changedAt: 0 };
-            window.__haloLyricTimer = setInterval(function () { if (!mount()) update(); }, 2000);
+            window.__haloLyric = { v: 6, current: null, sentenceMs: 0, changedAt: 0 };
+            window.__haloLyricTimer = setInterval(function () { if (!mount()) update(); }, 800);
             mount();
             update();
             return 'installed';

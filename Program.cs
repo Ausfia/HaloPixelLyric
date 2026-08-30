@@ -34,6 +34,9 @@ const int StaticMaxHoldMs = 3200;
 const int ScrollBaseMs = 900;
 const int ScrollMsPerUnit = 260;
 const int ScrollMaxHoldMs = 8000;
+// 翻页提前量：抵消链路固有延迟（轮询发现 + HID 传输 + 固件进入动画 ≈ 250-330ms），
+// 让视觉翻页更贴合演唱瞬间。体感偏早就调小，偏晚就调大。
+const int PageLeadMs = 280;
 
 static double DisplayUnits(string text)
 {
@@ -291,16 +294,26 @@ while (!exit.IsSet)
                                 var totalUnits = DisplayUnits(trimmed);
                                 double acc = 0;
                                 pageDeadlines.Clear();
+                                // 间奏钳制：网易云把"间奏前一句 + 整段间奏"计为该句时长（data-time 级 bug），
+                                // 表现为 sentenceMs 远超按字数估算的合理演唱时长（拖腔最多 2~3 倍，间奏可达 5~20 倍）。
+                                // 超过估算 3 倍即视为异常，回退按字数估算，避免长间奏期间翻页卡死。
+                                var estimateMs = EstimateHoldMs(trimmed);
+                                var effectiveMs = sentenceMs;
+                                if (sentenceMs > estimateMs * 3)
+                                {
+                                    Console.WriteLine($"[间奏] 官方时长 {sentenceMs}ms 异常（估算 {estimateMs}ms），回退估算值");
+                                    effectiveMs = 0;   // 0 = 使用估算路径
+                                }
                                 // 快节奏歌曲：每页最小驻留 = 句长/页数，钳在 [600, 1200]
                                 pageMinHoldMs = (int)Math.Clamp(
-                                    sentenceMs > 0 ? sentenceMs / (double)pendingPages.Count : 1200.0, 600, 1200);
+                                    effectiveMs > 0 ? effectiveMs / (double)pendingPages.Count : 1200.0, 600, 1200);
                                 foreach (var pg in pendingPages)
                                 {
-                                    if (sentenceMs > 0 && totalUnits > 0)
-                                        acc += sentenceMs * DisplayUnits(pg) / totalUnits;      // 按字数占比分配演唱时长
+                                    if (effectiveMs > 0 && totalUnits > 0)
+                                        acc += effectiveMs * DisplayUnits(pg) / totalUnits;        // 按字数占比分配演唱时长
                                     else
-                                        acc += EstimateHoldMs(pg);                                // 无时间戳：按长度估算
-                                    pageDeadlines.Add(base0 + (long)acc);
+                                        acc += estimateMs * DisplayUnits(pg) / Math.Max(totalUnits, 1);  // 回退：按估算时长占比分配
+                                    pageDeadlines.Add(base0 + (long)acc - PageLeadMs);           // 提前量抵消链路延迟
                                 }
                             }
                         }

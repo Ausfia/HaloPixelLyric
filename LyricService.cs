@@ -180,6 +180,7 @@ public sealed class LyricService
                     var lastAnchor = 0L;          // 最近一次句开始的墙钟锚（Unix ms）
                     var prePushedFrom = string.Empty;   // 预推发起时 current 停留的旧句（等待正式切换期间忽略它）
                     var prePushStreak = 0;              // 预推连续命中计数（降噪统计用）
+                    var lastMissedSentence = string.Empty;  // 预推错过诊断去重
                     var lastPushAt = DateTimeOffset.MinValue;
                     List<string>? pendingPages = null;
                     var pageIndex = 0;
@@ -268,6 +269,22 @@ public sealed class LyricService
                                     {
                                         prePushedFrom = string.Empty;
                                         if (changedAt > 0) lastAnchor = changedAt;
+                                        // 预推命中：此刻拿到该句真实时长，用真实锚点重排剩余页时刻
+                                        //（预推时后续页按估算句长排的，长句估算偏短会翻早）
+                                        // deadline 语义：deadline[j] = 推第 j+2 页的时刻 = baseAt + 累计时长 - 提前量，
+                                        // 必须从第 1 页起全量重填（之前误把已推页时长重复累加，导致翻页滞后/卡死）
+                                        if (pendingPages is not null && pageIndex < pendingPages.Count && sentenceMs > 0)
+                                        {
+                                            var baseAt = changedAt > 0 ? changedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                                            var totalUnits = LyricLogic.DisplayUnits(sentence);
+                                            pageDeadlines.Clear();
+                                            double acc = 0;
+                                            for (var i = 0; i < pendingPages.Count; i++)
+                                            {
+                                                acc += sentenceMs * LyricLogic.DisplayUnits(pendingPages[i]) / totalUnits;
+                                                pageDeadlines.Add(baseAt + (long)acc - Settings.PageLeadMs);
+                                            }
+                                        }
                                         prePushStreak++;
                                         if (prePushStreak % 20 == 0)
                                             Log?.Invoke($"[预推] 已连续命中 {prePushStreak} 句");
@@ -282,7 +299,10 @@ public sealed class LyricService
                                     {
                                         var nextAt = lastAnchor + sentenceMs;
                                         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                        if (nowMs >= nextAt - Settings.PrePushLeadMs && nowMs <= nextAt + 1500)
+                                        // 提前量对短句自适应：间隔小于预设提前量时钳制为本句间隔，
+                                        // 否则窗口整体落在过去必然错过（如编曲信息行间隔仅百余毫秒）
+                                        var leadMs = Math.Min(Settings.PrePushLeadMs, sentenceMs);
+                                        if (nowMs >= nextAt - leadMs && nowMs <= nextAt + 1500)
                                         {
                                             var pages = LyricLogic.SplitLyricPages(nextText, Settings);
                                             // 以预测时刻为基准排后续页（下一句时长未知，按字数估算）
@@ -294,7 +314,7 @@ public sealed class LyricService
                                             foreach (var pg in pages)
                                             {
                                                 acc += estimateMs * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
-                                                pageDeadlines.Add(nextAt + (long)acc - Settings.PrePushLeadMs);
+                                                pageDeadlines.Add(nextAt + (long)acc - leadMs);
                                             }
                                             lastSentence = nextText;   // 正式切换到来时 trimmed==lastSentence，直接沿用此队列
                                             prePushedFrom = sentence;  // 记住发起预推时的旧句，等待期内忽略它
@@ -305,6 +325,12 @@ public sealed class LyricService
                                             PushToDevice(pages[0]);
                                             lastPushAt = DateTimeOffset.UtcNow;
                                             Log?.Invoke($"[预推] {pages[0]}");
+                                        }
+                                        else if (nowMs > nextAt + 1500 && lastMissedSentence != nextText)
+                                        {
+                                            // 诊断：预推错过（每句只报一次），定位是哪条条件挡路
+                                            lastMissedSentence = nextText;
+                                            Log?.Invoke($"[dbg-预推错过] 窗口已过 {nowMs - nextAt}ms | anchorDiff={(changedAt > 0 ? changedAt - lastAnchor : -999)}ms sentenceMs={sentenceMs} | next={(nextText.Length > 12 ? nextText[..12] : nextText)}");
                                         }
                                     }
 

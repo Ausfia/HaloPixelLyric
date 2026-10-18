@@ -5,3 +5,4 @@ publish/
 *.user
 .vs/
 .idea/
+dist/

@@ -1,70 +1,109 @@
 namespace HaloPixelLyric;
 
 /// <summary>
-/// 注入网易云页面的歌词采集脚本（v7，轮询模式 + 演唱时长 + 下一句预取）。
-/// 原理：监听 ul.lyric 内 li 的 class 变化，"line current" 即网易云正在显示的歌词行
-/// （数据层驱动，与播放页视图是否可见无关）。
-/// 采集：当前行文本 current、句长 sentenceMs（下一行 data-time 差）、行切换时刻 changedAt、
-/// 下一行文本 nextText（供 C# 预推第一页，抵消每句首屏的检测/动画延迟）。
-/// 说明：不使用 console/binding 事件通道——该 CEF 定制内核不转发这些事件。
+/// 注入网易云页面的采集脚本（v12，幂等重装设计）。
+///
+/// 要点：每次 CDP 重连都全量执行本脚本（不设 alive-skip）——
+/// registerCall 重注册（自愈探针/旧版残留对回调的覆盖）、channel.call hook 基于保存的
+/// 原始函数重建（防叠加）、歌词/标题/激活会话状态从旧对象继承（避免重装后 1~2 秒取词空窗）。
+///
+/// 数据链路（全部与网易云 UI 状态无关）：
+/// 1. onPlayProgress（native 30Hz：[playId, 秒, 状态]）——进度唯一驱动源
+/// 2. 会话甄别：新 playId 需连续 3 次进度递增才采纳（过滤托盘时混入的预加载会话，其进度恒 0）
+/// 3. 采纳/切歌 → 页面内 fetch 网易云歌词 API（yv=1 参数取逐字 yrc，lv=1 普通 LRC）
+/// 4. hook channel.call：setInfo（歌名）、setTotalTime
 /// </summary>
 public static class WatcherScript
 {
     public const string Code = """
         (function () {
-            if (window.__haloLyric && window.__haloLyric.v === 7) { return 'alive'; }
-            if (window.__haloLyricTimer) { try { clearInterval(window.__haloLyricTimer); } catch (e) { } }
-            var state = { observer: null, lastTime: null };
-
-            function update() {
-                var t = null, ms = 0, nx = null;
-                var li = document.querySelector('ul.lyric li.current');
-                if (li) {
-                    var ps = Array.prototype.slice.call(li.querySelectorAll('p'))
-                        .map(function (p) { return (p.textContent || '').trim(); })
-                        .filter(Boolean);
-                    t = ps.length ? ps[0] : null;
-                    var t0 = parseFloat(li.getAttribute('data-time'));
-                    var sib = li.nextElementSibling;
-                    var t1 = sib ? parseFloat(sib.getAttribute('data-time')) : NaN;
-                    if (isFinite(t0) && isFinite(t1) && t1 > t0) ms = Math.round((t1 - t0) * 1000);
-                    if (sib) {
-                        var nps = Array.prototype.slice.call(sib.querySelectorAll('p'))
-                            .map(function (p) { return (p.textContent || '').trim(); })
-                            .filter(Boolean);
-                        nx = nps.length ? nps[0] : null;
-                    }
-                    if (t0 !== state.lastTime) {
-                        state.lastTime = t0;
-                        window.__haloLyric.changedAt = Date.now();
-                    }
-                }
-                window.__haloLyric.current = t;
-                window.__haloLyric.sentenceMs = ms;
-                window.__haloLyric.nextText = nx;
+            var old = window.__haloLyric;
+            var S = window.__haloLyric = {
+                v: 12,
+                playId: '',
+                progress: -1,
+                playing: false,
+                progressAt: 0,
+                lyricYrc: '',
+                lyricLrc: '',
+                lyricFrom: '',
+                songTitle: '',
+                totalTime: 0,
+                _lastFetchedSong: '',
+                _activeId: ''
+            };
+            // 继承旧状态：歌词/标题/已取词标记/激活会话（重装不空窗、不重发请求）
+            if (old) {
+                S.lyricYrc = old.lyricYrc || '';
+                S.lyricLrc = old.lyricLrc || '';
+                S.lyricFrom = old.lyricFrom || '';
+                S.songTitle = old.songTitle || '';
+                S._lastFetchedSong = old._lastFetchedSong || '';
+                S._activeId = old._activeId || '';
+                S.playId = old.playId || '';   // 漏继承会导致"已激活分支不设 playId"→ C# 拿到空 id
             }
+            S.progress = -1;   // 进度需重新确认（新回调首次推送即恢复）
 
-            function mount() {
-                if (state.observer) return true;
-                var ul = document.querySelector('ul.lyric');
-                if (!ul) return false;
-                state.observer = new MutationObserver(function (muts) {
-                    for (var i = 0; i < muts.length; i++) {
-                        var m = muts[i];
-                        if (m.type === 'attributes') {
-                            if (/(^|\s)current(\s|$)/.test(String(m.target.className || ''))) { update(); return; }
-                        } else if (m.type === 'childList') { update(); return; }
+            function fetchLyrics(songId) {
+                S.lyricFrom = 'fetching';
+                S.lyricYrc = '';
+                S.lyricLrc = '';
+                fetch('https://music.163.com/api/song/lyric/v1?id=' + songId + '&lv=1&kv=1&yv=1&ytv=1&yrv=1&tv=-1&rv=-1', { credentials: 'include' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        if (d && d.yrc && d.yrc.lyric) { S.lyricYrc = String(d.yrc.lyric); S.lyricFrom = 'api-yrc'; }
+                        else if (d && d.lrc && d.lrc.lyric) { S.lyricLrc = String(d.lrc.lyric); S.lyricFrom = 'api-lrc'; }
+                        else S.lyricFrom = 'api-empty';
+                    })
+                    .catch(function (e) { S.lyricFrom = 'api-error'; });
+            }
+            S.retry = function () { if (S._lastFetchedSong) fetchLyrics(S._lastFetchedSong); };
+
+            // ===== 进度事件：会话甄别 + 状态更新 =====
+            var tracks = {};   // 候选会话 -> {last, streak}（不跨重装保留，甄别 90ms 内完成）
+            try {
+                channel.registerCall('audioplayer.onPlayProgress', function (id, sec, st) {
+                    var pid = String(id);
+                    var p = Number(sec) || 0;
+                    if (pid !== S._activeId) {
+                        var t = tracks[pid] || (tracks[pid] = { last: -1, streak: 0 });
+                        if (p > t.last + 0.02) t.streak++; else t.streak = 0;
+                        t.last = p;
+                        if (t.streak < 3) return;
+                        S._activeId = pid;
+                        tracks = {};
+                        S.playId = pid;
+                        S.progress = p;
+                        S.playing = true;
+                        S.progressAt = Date.now();
+                        var songId = pid.split('_')[0];
+                        if (songId && songId !== S._lastFetchedSong) {
+                            S._lastFetchedSong = songId;
+                            S.songTitle = '';
+                            fetchLyrics(songId);
+                        }
+                        return;
                     }
+                    S.progress = p;
+                    S.playing = Number(st) !== 0;
+                    S.progressAt = Date.now();
                 });
-                state.observer.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
-                update();
-                return true;
-            }
+            } catch (e) { }
 
-            window.__haloLyric = { v: 7, current: null, sentenceMs: 0, changedAt: 0, nextText: null };
-            window.__haloLyricTimer = setInterval(function () { if (!mount()) update(); }, 800);
-            mount();
-            update();
+            // ===== hook channel.call（基于原始函数重建，防叠加） =====
+            if (!window.__haloOrigCall) window.__haloOrigCall = channel.call;
+            var origCall = window.__haloOrigCall;
+            channel.call = function () {
+                var api = String(arguments[0]);
+                try {
+                    if (api === 'player.setInfo' && arguments[2] && arguments[2][0]) {
+                        S.songTitle = (arguments[2][0].songName || '') + ' - ' + (arguments[2][0].artistName || '');
+                    } else if (api === 'player.setTotalTime' && arguments[2]) {
+                        S.totalTime = Number(arguments[2][0]) || 0;
+                    }
+                } catch (e) { }
+                return origCall.apply(this, arguments);
+            };
             return 'installed';
         })()
         """;

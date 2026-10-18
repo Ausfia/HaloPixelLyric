@@ -7,8 +7,12 @@ using System.Text.Json;
 namespace HaloPixelLyric;
 
 /// <summary>
-/// 歌词桥服务：可启动/停止的常驻循环。
-/// 启动时确保网易云带调试参数运行（必要时自动重启网易云），然后注入监听、轮询推屏。
+/// 歌词桥服务（v1.3 架构：原生进度事件流驱动）。
+///
+/// 数据链路：watcher v8 订阅 audioplayer.onPlayProgress（native 30Hz 推流）→
+/// 轮询读取进度/歌词 → 进度对歌词时间轴定位当前行 → 按歌曲时间轴调度分页显示。
+/// 与网易云 UI 状态完全解耦（托盘/关桌面歌词/页面不渲染均正常）；
+/// 暂停/seek 由进度流天然正确（无墙钟换算），暂停超时自动恢复像素屏时钟。
 /// </summary>
 public sealed class LyricService
 {
@@ -19,7 +23,7 @@ public sealed class LyricService
     public DisplaySettings Settings { get; set; } = new();
     public bool IsRunning => _cts is { IsCancellationRequested: false };
 
-    /// <summary>日志行（含歌词推送与诊断信息）</summary>
+    /// <summary>日志行</summary>
     public event Action<string>? Log;
 
     /// <summary>当前推上像素屏的歌词行（控制台页大字展示用）</summary>
@@ -67,7 +71,6 @@ public sealed class LyricService
 
     private async Task<bool> EnsureCloudMusicAsync(CancellationToken ct)
     {
-        // 调试口已开
         try
         {
             var probe = await _http.GetAsync($"http://127.0.0.1:{Settings.CdpPort}/json/version", ct);
@@ -122,9 +125,7 @@ public sealed class LyricService
             return;
         }
         Log?.Invoke("[ok] 像素屏已连接");
-
         device.SetTextLayout(HaloPixelTextLayout.Center);
-        var lastPushed = string.Empty;
 
         try
         {
@@ -156,7 +157,7 @@ public sealed class LyricService
                         try
                         {
                             var result = await cdp.EvaluateAsync(WatcherScript.Code);
-                            Log?.Invoke($"[ok] 歌词监听已注入（{tag}）：{result ?? "无返回"}");
+                            Log?.Invoke($"[ok] 事件订阅已注入（{tag}）：{result ?? "无返回"}");
                         }
                         catch (Exception ex) { Log?.Invoke($"[warn] 注入失败（{tag}）: {ex.Message}"); }
                         finally { injectGate.Release(); }
@@ -176,242 +177,203 @@ public sealed class LyricService
                     await InjectAsync("启动");
 
                     using var sessionCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                    var lastSentence = string.Empty;
-                    var lastAnchor = 0L;          // 最近一次句开始的墙钟锚（Unix ms）
-                    var prePushedFrom = string.Empty;   // 预推发起时 current 停留的旧句（等待正式切换期间忽略它）
-                    var prePushStreak = 0;              // 预推连续命中计数（降噪统计用）
-                    var lastMissedSentence = string.Empty;  // 预推错过诊断去重
-                    var lastPushAt = DateTimeOffset.MinValue;
-                    List<string>? pendingPages = null;
-                    var pageIndex = 0;
-                    var pageDeadlines = new List<long>();
-                    var pageMinHoldMs = 1200;
+                    var pollTask = Task.Run(() => PollLoopAsync(cdp, device, sessionCts.Token), sessionCts.Token);
 
-                    var pollTask = Task.Run(async () =>
-                    {
-                        while (!sessionCts.IsCancellationRequested)
-                        {
-                            try
-                            {
-                                var raw = await cdp.EvaluateAsync(
-                                    "window.__haloLyric ? JSON.stringify({t: window.__haloLyric.current === null ? '' : window.__haloLyric.current, ms: window.__haloLyric.sentenceMs || 0, at: window.__haloLyric.changedAt || 0, nx: window.__haloLyric.nextText === null ? '' : window.__haloLyric.nextText}) : null");
-                                if (raw is not null)
-                                {
-                                    string sentence = "";
-                                    string nextText = "";
-                                    long sentenceMs = 0, changedAt = 0;
-                                    try
-                                    {
-                                        using var doc = JsonDocument.Parse(raw);
-                                        sentence = doc.RootElement.GetProperty("t").GetString() ?? "";
-                                        sentenceMs = doc.RootElement.GetProperty("ms").GetInt64();
-                                        changedAt = doc.RootElement.GetProperty("at").GetInt64();
-                                        nextText = doc.RootElement.GetProperty("nx").GetString() ?? "";
-                                    }
-                                    catch { }
-
-                                    if (sentence.Length > 0)
-                                    {
-                                        var trimmed = sentence;   // 整句不预截断，截断在分页后进行
-                                        if (trimmed != lastSentence)
-                                        {
-                                            if (prePushedFrom.Length > 0 && trimmed == prePushedFrom)
-                                            {
-                                                // 预推等待期：current 仍停留在旧句，忽略（避免把预推队列拉回去）
-                                            }
-                                            else
-                                            {
-                                            lastSentence = trimmed;
-                                            var anchorNow = changedAt > 0 ? changedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                            lastAnchor = anchorNow;
-                                            if (prePushedFrom.Length > 0)
-                                            {
-                                                // 走到常规路径且此前有未命中的预推（切到了别的句/拖动）：报落空并重置统计
-                                                Log?.Invoke($"[预推落空] 已回退正式路径（连续命中 {prePushStreak} 句后中断）");
-                                                prePushStreak = 0;
-                                            }
-                                            prePushedFrom = string.Empty;   // 常规新句处理：清除预推状态
-                                            pendingPages = LyricLogic.SplitLyricPages(trimmed, Settings);
-                                            pageIndex = 0;
-                                            if (pendingPages.Count > 1)
-                                                Log?.Invoke($"[分句] 「{trimmed}」→ {pendingPages.Count} 页（句长 {sentenceMs}ms）");
-
-                                            var base0 = anchorNow;
-                                            var totalUnits = LyricLogic.DisplayUnits(trimmed);
-                                            double acc = 0;
-                                            pageDeadlines.Clear();
-                                            var estimateMs = LyricLogic.EstimateHoldMs(trimmed, Settings);
-                                            var effectiveMs = sentenceMs;
-                                            if (sentenceMs > estimateMs * Settings.InterludeFactor)
-                                            {
-                                                Log?.Invoke($"[间奏] 官方时长 {sentenceMs}ms 异常（估算 {estimateMs}ms），回退估算值");
-                                                effectiveMs = 0;
-                                            }
-                                            pageMinHoldMs = (int)Math.Clamp(
-                                                effectiveMs > 0 ? effectiveMs / (double)pendingPages.Count : 1200.0, 600, 1200);
-                                            foreach (var pg in pendingPages)
-                                            {
-                                                if (effectiveMs > 0 && totalUnits > 0)
-                                                    acc += effectiveMs * LyricLogic.DisplayUnits(pg) / totalUnits;
-                                                else
-                                                    acc += estimateMs * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
-                                                pageDeadlines.Add(base0 + (long)acc - Settings.PageLeadMs);
-                                            }
-                                            }
-                                        }
-                                    }
-
-                                    // ===== 预推命中检测 =====
-                                    // 正式切换到了预推的句子（trimmed == lastSentence 不会触发上面的新句分支）：
-                                    // 不重排不重推（第一页已在预推时上屏），仅用真实切换时刻更新锚点，供下一句预推更准。
-                                    // 命中不逐句打日志（太吵），连续命中每 20 句报一次统计。
-                                    if (prePushedFrom.Length > 0 && sentence.Length > 0 && sentence == lastSentence)
-                                    {
-                                        prePushedFrom = string.Empty;
-                                        if (changedAt > 0) lastAnchor = changedAt;
-                                        // 预推命中：此刻拿到该句真实时长，用真实锚点重排剩余页时刻
-                                        //（预推时后续页按估算句长排的，长句估算偏短会翻早）
-                                        // deadline 语义：deadline[j] = 推第 j+2 页的时刻 = baseAt + 累计时长 - 提前量，
-                                        // 必须从第 1 页起全量重填（之前误把已推页时长重复累加，导致翻页滞后/卡死）
-                                        if (pendingPages is not null && pageIndex < pendingPages.Count && sentenceMs > 0)
-                                        {
-                                            var baseAt = changedAt > 0 ? changedAt : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                            var totalUnits = LyricLogic.DisplayUnits(sentence);
-                                            pageDeadlines.Clear();
-                                            double acc = 0;
-                                            for (var i = 0; i < pendingPages.Count; i++)
-                                            {
-                                                acc += sentenceMs * LyricLogic.DisplayUnits(pendingPages[i]) / totalUnits;
-                                                pageDeadlines.Add(baseAt + (long)acc - Settings.PageLeadMs);
-                                            }
-                                        }
-                                        prePushStreak++;
-                                        if (prePushStreak % 20 == 0)
-                                            Log?.Invoke($"[预推] 已连续命中 {prePushStreak} 句");
-                                    }
-
-                                    // ===== 下一句第一页预推 =====
-                                    // 当前句所有页已推完、拿到下一句文本时：在「下一句开始时刻 − 提前量」主动推它的第一页，
-                                    // 抵消每句首屏的检测+动画延迟（预测锚 = 本句开始 + 句长）。
-                                    // 暂停/拖动防护：超过预测时刻 +1.5s 当前句仍未切换则放弃，等正式切换覆盖。
-                                    if (pendingPages is null && sentenceMs > 0 && lastAnchor > 0
-                                        && nextText.Length > 0 && nextText != lastSentence)
-                                    {
-                                        var nextAt = lastAnchor + sentenceMs;
-                                        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                        // 提前量对短句自适应：间隔小于预设提前量时钳制为本句间隔，
-                                        // 否则窗口整体落在过去必然错过（如编曲信息行间隔仅百余毫秒）
-                                        var leadMs = Math.Min(Settings.PrePushLeadMs, sentenceMs);
-                                        if (nowMs >= nextAt - leadMs && nowMs <= nextAt + 1500)
-                                        {
-                                            var pages = LyricLogic.SplitLyricPages(nextText, Settings);
-                                            // 以预测时刻为基准排后续页（下一句时长未知，按字数估算）
-                                            var totalUnits = LyricLogic.DisplayUnits(nextText);
-                                            var estimateMs = LyricLogic.EstimateHoldMs(nextText, Settings);
-                                            double acc = 0;
-                                            pageDeadlines.Clear();
-                                            pageMinHoldMs = (int)Math.Clamp(estimateMs / (double)pages.Count, 600, 1200);
-                                            foreach (var pg in pages)
-                                            {
-                                                acc += estimateMs * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
-                                                pageDeadlines.Add(nextAt + (long)acc - leadMs);
-                                            }
-                                            lastSentence = nextText;   // 正式切换到来时 trimmed==lastSentence，直接沿用此队列
-                                            prePushedFrom = sentence;  // 记住发起预推时的旧句，等待期内忽略它
-                                            // 单页句没有后续页要管：队列直接置空，否则推页分支永远无法释放它，
-                                            // 导致下一句无法预推（交替跳句 bug）
-                                            pendingPages = pages.Count > 1 ? pages : null;
-                                            pageIndex = 1;             // 第一页马上推，后续页按上面排的 deadline
-                                            PushToDevice(pages[0]);
-                                            lastPushAt = DateTimeOffset.UtcNow;
-                                            Log?.Invoke($"[预推] {pages[0]}");
-                                        }
-                                        else if (nowMs > nextAt + 1500 && lastMissedSentence != nextText)
-                                        {
-                                            // 诊断：预推错过（每句只报一次），定位是哪条条件挡路
-                                            lastMissedSentence = nextText;
-                                            Log?.Invoke($"[dbg-预推错过] 窗口已过 {nowMs - nextAt}ms | anchorDiff={(changedAt > 0 ? changedAt - lastAnchor : -999)}ms sentenceMs={sentenceMs} | next={(nextText.Length > 12 ? nextText[..12] : nextText)}");
-                                        }
-                                    }
-
-                                    if (pendingPages is not null)
-                                    {
-                                        // 防御：页索引越界即视为本句播完，释放队列
-                                        if (pageIndex >= pendingPages.Count)
-                                        {
-                                            pendingPages = null;
-                                        }
-                                        else
-                                        {
-                                        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                                        var due = pageIndex == 0
-                                            || (pageIndex - 1 < pageDeadlines.Count && nowMs >= pageDeadlines[pageIndex - 1]);
-                                        var minHoldOk = lastPushAt == DateTimeOffset.MinValue
-                                            || (DateTimeOffset.UtcNow - lastPushAt).TotalMilliseconds >= pageMinHoldMs;
-                                        if (due && minHoldOk)
-                                        {
-                                            var page = pendingPages[pageIndex];
-                                            PushToDevice(page);
-                                            Log?.Invoke($"[歌词]{(pendingPages.Count > 1 ? $"({pageIndex + 1}/{pendingPages.Count})" : "")} {page}");
-                                            lastPushed = page;
-                                            lastPushAt = DateTimeOffset.UtcNow;
-                                            pageIndex++;
-                                            if (pageIndex >= pendingPages.Count) pendingPages = null;
-                                        }
-                                        }
-                                    }
-                                }
-                            }
-                            catch (OperationCanceledException) { break; }
-                            catch (ObjectDisposedException) { break; }
-                            catch (System.Net.WebSockets.WebSocketException) { /* 连接断开瞬态，由 Disconnected 驱动重连 */ }
-                            catch (System.Net.Http.HttpRequestException) { /* 同上 */ }
-                            catch (Exception ex)
-                            {
-                                // 程序错误必须暴露——曾经的裸吞把页索引越界埋成了"隔句跳"的隐性 bug
-                                Log?.Invoke($"[错误] 轮询未处理异常 {ex.GetType().Name}: {ex.Message}");
-                            }
-                            try { await Task.Delay(60, sessionCts.Token); } catch (OperationCanceledException) { break; }
-                        }
-                    }, sessionCts.Token);
-
-                    Log?.Invoke("[ok] 轮询已启动，等待歌词...");
+                    Log?.Invoke("[ok] 轮询已启动，等待播放...");
                     await cdp.Disconnected;
                     sessionCts.Cancel();
                     try { await pollTask; } catch { }
                     if (!ct.IsCancellationRequested)
-                    {
-                        // 网易云 CEF 有 ~31s 周期的 watchdog 踢调试连接，属不可抗力：
-                        // 立即重连（无固定等待），恢复窗口 ≈0.2s
                         Log?.Invoke("[warn] CDP 被 watchdog 断开，立即重连...");
-                    }
                 }
+                catch (System.Net.WebSockets.WebSocketException) { }
+                catch (OperationCanceledException) { }
                 catch (Exception ex)
                 {
                     Log?.Invoke($"[warn] CDP 异常: {ex.Message}，快速重试...");
-                    await Task.Delay(150, ct);   // 服务端释放旧连接的短窗口，快速退避
+                    await Task.Delay(150, ct);
                 }
             }
         }
         catch (OperationCanceledException) { }
         finally
         {
-            // 退出时恢复时钟模式（使用最后推过的设备）
             try { device.SetUIModel(HaloPixelUIModel.Clock); Log?.Invoke("[ok] 已停止，像素屏恢复时钟模式。"); }
             catch { }
             _cts = null;
             RunningChanged?.Invoke();
         }
+    }
 
-        void PushToDevice(string text)
+    /// <summary>进度驱动的显示调度主循环（歌曲时间轴，暂停/seek 天然正确）。</summary>
+    private async Task PollLoopAsync(CdpClient cdp, HaloPixelDevice device, CancellationToken ct)
+    {
+        // 歌词状态
+        List<LyricLine>? lines = null;
+        string lyricKey = "";                 // 歌词源标识（playId+lyricFrom+hash），变化时重解析
+        string lastLineText = "";             // 当前行文本（换行检测）
+        // 显示队列（歌曲时间轴毫秒）
+        List<(string Text, double AtMs)>? queue = null;
+        int queueIndex = 0;
+        double lastPushProgress = -1;
+        // 暂停回时钟
+        var pausedSince = DateTimeOffset.MinValue;
+        var clockRestored = false;
+        var lastPushAt = DateTimeOffset.MinValue;
+        // 取词失败重试
+        var lastFrom = "";
+        var fromSince = DateTimeOffset.MinValue;
+        var lastRetry = DateTimeOffset.MinValue;
+
+        while (!ct.IsCancellationRequested)
         {
             try
             {
-                device.SetTextLayout(HaloPixelTextLayout.Center);
-                device.ShowText(LyricLogic.TrimToByteBudget(text, 55));
-                LyricPushed?.Invoke(text);
+                var raw = await cdp.EvaluateAsync(
+                    "window.__haloLyric ? JSON.stringify({id:window.__haloLyric.playId, p:window.__haloLyric.progress, pl:window.__haloLyric.playing, at:window.__haloLyric.progressAt, y:window.__haloLyric.lyricYrc, l:window.__haloLyric.lyricLrc, ti:window.__haloLyric.songTitle, f:window.__haloLyric.lyricFrom, d:window.__haloLyric.domLines}) : null");
+                if (raw is not null)
+                {
+                    string playId = ""; double progress = -1; bool playing = false; long progressAt = 0;
+                    string yrc = "", lrc = "", title = "", from = ""; string[]? dom = null;
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(raw);
+                        var r = doc.RootElement;
+                        playId = r.GetProperty("id").GetString() ?? "";
+                        progress = r.GetProperty("p").GetDouble();
+                        playing = r.GetProperty("pl").GetBoolean();
+                        progressAt = r.TryGetProperty("at", out var atEl) ? atEl.GetInt64() : 0;
+                        yrc = r.TryGetProperty("y", out var y) ? (y.GetString() ?? "") : "";
+                        lrc = r.TryGetProperty("l", out var lv) ? (lv.GetString() ?? "") : "";
+                        title = r.TryGetProperty("ti", out var t) ? (t.GetString() ?? "") : "";
+                        from = r.TryGetProperty("f", out var f) ? (f.GetString() ?? "") : "";
+                        dom = r.TryGetProperty("d", out var d) && d.ValueKind == JsonValueKind.Array
+                            ? d.EnumerateArray().Select(x => x.GetString()).ToArray() : null;
+                    }
+                    catch { }
+
+                    var newKey = playId + "|" + from + "|" + (yrc.Length > 0 ? "y" + yrc.Length : "") + (lrc.Length > 0 ? "l" + lrc.Length : "");
+                    // 取词失败/挂起自动重试（fetchLyrics 单次调用，网络偶发失败后若无重试将永久卡住）
+                    if (lines is null && (from == "api-error" || from == "fetching"))
+                    {
+                        if (from != lastFrom) { lastFrom = from; fromSince = DateTimeOffset.UtcNow; }
+                        else if ((DateTimeOffset.UtcNow - fromSince).TotalMilliseconds > 4000 &&
+                                 (DateTimeOffset.UtcNow - lastRetry).TotalMilliseconds > 3000)
+                        {
+                            lastRetry = DateTimeOffset.UtcNow;
+                            _ = cdp.EvaluateAsync("window.__haloLyric.retry && window.__haloLyric.retry()");
+                            Log?.Invoke($"[重试] 歌词获取处于 {from}，重新请求");
+                        }
+                    }
+                    else lastFrom = "";
+                    if (lines is null || newKey != lyricKey)
+                    {
+                        lyricKey = newKey;
+                        // 歌词源只用 API：yrc 字段优先；lrc 字段用混合解析器
+                        // （实测会混装 JSON 元数据行 / yrc 逐字行 / 普通 LRC 行，短路式解析会丢正文）。
+                        lines = LyricLogic.ParseYrc(yrc) ?? LyricLogic.ParseMixed(lrc);
+                        lastLineText = "";
+                        queue = null;
+                        if (lines is not null)
+                            Log?.Invoke($"[歌词源] {(from.Length > 0 ? from + " " : "")}{(yrc.Length > 0 ? "yrc" : "LRC")} 共 {lines.Count} 行{(title.Length > 0 ? $" · {title}" : "")}");
+                        else if (from == "api-empty" && title.Length > 0 && lastLineText != title)
+                        {
+                            // 无歌词的歌：显示一次歌名后安静（不再显示任何行）
+                            lastLineText = title;
+                            try { device.ShowText(LyricLogic.TrimToByteBudget(title, 55)); LyricPushed?.Invoke(title); } catch { }
+                            Log?.Invoke($"[无歌词] {title}");
+                        }
+                    }
+
+                    // ===== 暂停/停止/无歌词处理：断流或无词 → 3 秒后回时钟 =====
+                    // onPlayProgress 暂停时静默停推（onPause 事件不可靠），progressAt 超时是最可靠的暂停信号；
+                    // 无歌词（api-empty）同理：没有可显示的内容，回时钟比停留旧句/显示文案更自然
+                    var streamAlive = playing && progress >= 0 && progressAt > 0
+                        && (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - progressAt) < 2000;
+                    // 无有效词 = API 完成但无行（api-empty 或数据格式解析失败）
+                    var noLyric = lines is null && (from == "api-empty" || from == "api-lrc" || from == "api-yrc");
+                    if (lines is not null || noLyric)
+                    {
+                        if (!streamAlive || noLyric)
+                        {
+                            if (pausedSince == DateTimeOffset.MinValue) pausedSince = DateTimeOffset.UtcNow;
+                            if (!clockRestored && (DateTimeOffset.UtcNow - pausedSince).TotalSeconds >= 3)
+                            {
+                                try { device.SetUIModel(HaloPixelUIModel.Clock); clockRestored = true; Log?.Invoke("[暂停] 已恢复时钟模式"); } catch { }
+                            }
+                        }
+                        else
+                        {
+                            pausedSince = DateTimeOffset.MinValue;
+                            clockRestored = false;
+                        }
+
+                        // ===== 当前行定位（进度 → 时间轴；流活跃且有歌词时） =====
+                        if (streamAlive && lines is not null)
+                        {
+                            LyricLine? current = null;
+                            foreach (var ln in lines)
+                            {
+                                if (ln.StartMs <= progress * 1000 + 0.5) current = ln;
+                                else break;
+                            }
+                            if (current is not null && current.Text != lastLineText)
+                            {
+                                lastLineText = current.Text;
+                                // 行切换：构建显示队列（分页，每页时刻 = 行开始 + 占比×行时长 - 提前量）
+                                var pages = LyricLogic.SplitLyricPages(current.Text, Settings);
+                                var lineDur = current.DurMs > 0 ? current.DurMs : LyricLogic.EstimateHoldMs(current.Text, Settings);
+                                var totalUnits = LyricLogic.DisplayUnits(current.Text);
+                                queue = new List<(string, double)>();
+                                double acc = 0;
+                                foreach (var pg in pages)
+                                {
+                                    // 先记时刻再累加：第一页 = 行开始 - 提前量，后续页按前页时长顺延
+                                    // （此前顺序颠倒，第一页被推迟整页时长 = "歌词慢一句"的根源）
+                                    queue.Add((pg, current.StartMs + acc - Settings.PageLeadMs));
+                                    acc += lineDur * LyricLogic.DisplayUnits(pg) / Math.Max(totalUnits, 1);
+                                }
+                                queueIndex = 0;
+                                if (pages.Count > 1)
+                                    Log?.Invoke($"[分句] 「{current.Text}」→ {pages.Count} 页（行 {current.StartMs:F0}ms +{lineDur:F0}ms）");
+                            }
+
+                            // ===== 到期推页（进度比对歌曲时间轴） =====
+                            if (queue is not null)
+                            {
+                                var progressMs = progress * 1000;
+                                var minHoldOk = lastPushAt == DateTimeOffset.MinValue
+                                    || (DateTimeOffset.UtcNow - lastPushAt).TotalMilliseconds >= 600;
+                                while (queueIndex < queue.Count && progressMs >= queue[queueIndex].AtMs && minHoldOk)
+                                {
+                                    var (text, _) = queue[queueIndex];
+                                    try
+                                    {
+                                        device.ShowText(LyricLogic.TrimToByteBudget(text, 55));
+                                        LyricPushed?.Invoke(text);
+                                        Log?.Invoke($"[歌词]{(queue.Count > 1 ? $"({queueIndex + 1}/{queue.Count})" : "")} {text}");
+                                        lastPushAt = DateTimeOffset.UtcNow;
+                                    }
+                                    catch (Exception ex) { Log?.Invoke($"[warn] HID 写入失败: {ex.Message}"); }
+                                    queueIndex++;
+                                    if (queueIndex < queue.Count) break;   // 每页至少间隔一个轮询周期
+                                }
+                                if (queueIndex >= queue.Count) queue = null;
+                            }
+                            lastPushProgress = progress;
+                        }
+                    }
+                }
             }
-            catch (Exception ex) { Log?.Invoke($"[warn] HID 写入失败: {ex.Message}"); }
+            catch (OperationCanceledException) { break; }
+            catch (ObjectDisposedException) { break; }
+            catch (System.Net.WebSockets.WebSocketException) { }
+            catch (System.Net.Http.HttpRequestException) { }
+            catch (Exception ex)
+            {
+                Log?.Invoke($"[错误] 轮询未处理异常 {ex.GetType().Name}: {ex.Message}");
+            }
+            try { await Task.Delay(60, ct); } catch (OperationCanceledException) { break; }
         }
     }
 }

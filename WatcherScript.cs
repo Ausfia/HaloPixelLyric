@@ -44,20 +44,44 @@ public static class WatcherScript
             }
             S.progress = -1;   // 进度需重新确认（新回调首次推送即恢复）
 
+            function fetchSongInfo(songId) {
+                fetch('https://music.163.com/api/song/detail?ids=[' + songId + ']', { credentials: 'include' })
+                    .then(function (r) { return r.json(); })
+                    .then(function (d) {
+                        var song = d && d.songs && d.songs[0];
+                        if (!song) return;
+                        var artists = (song.artists || []).map(function (a) { return a.name; }).filter(Boolean).join(' / ');
+                        S.songTitle = artists ? (song.name + ' - ' + artists) : (song.name || '');
+                    })
+                    .catch(function () { });
+            }
+
             function fetchLyrics(songId) {
                 S.lyricFrom = 'fetching';
                 S.lyricYrc = '';
                 S.lyricLrc = '';
-                fetch('https://music.163.com/api/song/lyric/v1?id=' + songId + '&lv=1&kv=1&yv=1&ytv=1&yrv=1&tv=-1&rv=-1', { credentials: 'include' })
-                    .then(function (r) { return r.json(); })
-                    .then(function (d) {
-                        if (d && d.yrc && d.yrc.lyric) { S.lyricYrc = String(d.yrc.lyric); S.lyricFrom = 'api-yrc'; }
-                        else if (d && d.lrc && d.lrc.lyric) { S.lyricLrc = String(d.lrc.lyric); S.lyricFrom = 'api-lrc'; }
-                        else S.lyricFrom = 'api-empty';
-                    })
-                    .catch(function (e) { S.lyricFrom = 'api-error'; });
+                var base = 'https://music.163.com/api/song/lyric/v1?id=' + songId + '&yv=1&ytv=1&yrv=1&tv=-1&rv=-1';
+                // lv=1 优先（逐字 yrc 版本）；部分歌曲 lv=1 返回空，回退 lv=-1 取正文
+                function load(url, isRetry) {
+                    fetch(url, { credentials: 'include' })
+                        .then(function (r) { return r.json(); })
+                        .then(function (d) {
+                            var yrc = d && d.yrc && d.yrc.lyric ? String(d.yrc.lyric) : '';
+                            var lrc = d && d.lrc && d.lrc.lyric ? String(d.lrc.lyric) : '';
+                            if (!yrc && !lrc && !isRetry) { load(base + '&lv=-1&kv=-1', true); return; }
+                            if (yrc) { S.lyricYrc = yrc; S.lyricFrom = 'api-yrc'; }
+                            else if (lrc) { S.lyricLrc = lrc; S.lyricFrom = 'api-lrc'; }
+                            else S.lyricFrom = 'api-empty';
+                        })
+                        .catch(function (e) { S.lyricFrom = 'api-error'; });
+                }
+                load(base + '&lv=1&kv=1', false);
             }
             S.retry = function () { if (S._lastFetchedSong) fetchLyrics(S._lastFetchedSong); };
+
+            // 重装继承后补状态：歌名缺失补歌名；歌词为空（含 lv=1 空结果）重新取词
+            if (S._lastFetchedSong && !S.songTitle) fetchSongInfo(S._lastFetchedSong);
+            if (S._lastFetchedSong && !S.lyricYrc && !S.lyricLrc) fetchLyrics(S._lastFetchedSong);
 
             // ===== 进度事件：会话甄别 + 状态更新 =====
             var tracks = {};   // 候选会话 -> {last, streak}（不跨重装保留，甄别 90ms 内完成）
@@ -81,6 +105,7 @@ public static class WatcherScript
                             S._lastFetchedSong = songId;
                             S.songTitle = '';
                             fetchLyrics(songId);
+                            fetchSongInfo(songId);
                         }
                         return;
                     }

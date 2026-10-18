@@ -1,6 +1,8 @@
 using HaloPixelLyric.Hid;
 using HaloPixelLyric.Hid.Models;
 using System.Diagnostics;
+using System.IO;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json;
 
@@ -18,6 +20,7 @@ public sealed class LyricService
 {
     private CancellationTokenSource? _cts;
     private CdpClient? _activeCdp;
+    private string _lastTitle = "";
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(3) };
 
     public DisplaySettings Settings { get; set; } = new();
@@ -28,6 +31,9 @@ public sealed class LyricService
 
     /// <summary>当前推上像素屏的歌词行（控制台页大字展示用）</summary>
     public event Action<string>? LyricPushed;
+
+    /// <summary>当前歌曲标题变化（空字符串表示清空）</summary>
+    public event Action<string>? NowPlayingChanged;
 
     /// <summary>运行状态变化</summary>
     public event Action? RunningChanged;
@@ -48,6 +54,8 @@ public sealed class LyricService
         if (!IsRunning) return;
         _cts?.Cancel();
         _activeCdp?.Abort();   // 掐断当前 CDP 连接，让主循环立即走到恢复时钟的收尾
+        _lastTitle = "";
+        NowPlayingChanged?.Invoke("");
     }
 
     private static string? FindCloudMusicPath()
@@ -212,6 +220,8 @@ public sealed class LyricService
         List<LyricLine>? lines = null;
         string lyricKey = "";                 // 歌词源标识（playId+lyricFrom+hash），变化时重解析
         string lastLineText = "";             // 当前行文本（换行检测）
+        string lastNoLyricTitle = "";         // 无歌词歌曲只提示一次
+        string lastPlayId = "";               // 播放会话变化时重置无歌词提示
         // 显示队列（歌曲时间轴毫秒）
         List<(string Text, double AtMs)>? queue = null;
         int queueIndex = 0;
@@ -248,9 +258,21 @@ public sealed class LyricService
                         title = r.TryGetProperty("ti", out var t) ? (t.GetString() ?? "") : "";
                         from = r.TryGetProperty("f", out var f) ? (f.GetString() ?? "") : "";
                         dom = r.TryGetProperty("d", out var d) && d.ValueKind == JsonValueKind.Array
-                            ? d.EnumerateArray().Select(x => x.GetString()).ToArray() : null;
+                            ? d.EnumerateArray().Select(x => x.GetString() ?? "").ToArray() : null;
                     }
                     catch { }
+
+                    if (playId.Length > 0 && playId != lastPlayId)
+                    {
+                        lastPlayId = playId;
+                        lastNoLyricTitle = "";
+                    }
+
+                    if (title.Length > 0 && !string.Equals(title, _lastTitle, StringComparison.Ordinal))
+                    {
+                        _lastTitle = title;
+                        NowPlayingChanged?.Invoke(title);
+                    }
 
                     var newKey = playId + "|" + from + "|" + (yrc.Length > 0 ? "y" + yrc.Length : "") + (lrc.Length > 0 ? "l" + lrc.Length : "");
                     // 取词失败/挂起自动重试（fetchLyrics 单次调用，网络偶发失败后若无重试将永久卡住）
@@ -276,9 +298,10 @@ public sealed class LyricService
                         queue = null;
                         if (lines is not null)
                             Log?.Invoke($"[歌词源] {(from.Length > 0 ? from + " " : "")}{(yrc.Length > 0 ? "yrc" : "LRC")} 共 {lines.Count} 行{(title.Length > 0 ? $" · {title}" : "")}");
-                        else if (from == "api-empty" && title.Length > 0 && lastLineText != title)
+                        else if (from == "api-empty" && title.Length > 0 && lastNoLyricTitle != title)
                         {
                             // 无歌词的歌：显示一次歌名后安静（不再显示任何行）
+                            lastNoLyricTitle = title;
                             lastLineText = title;
                             try { device.ShowText(LyricLogic.TrimToByteBudget(title, 55)); LyricPushed?.Invoke(title); } catch { }
                             Log?.Invoke($"[无歌词] {title}");

@@ -1,12 +1,41 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <AssemblyName>HaloPixelLyric</AssemblyName>
+    <RootNamespace>HaloPixelLyric</RootNamespace>
+    <Version>1.4.0</Version>
+    <FileVersion>1.4.0.0</FileVersion>
+    <AssemblyVersion>1.4.0.0</AssemblyVersion>
+    <Product>HaloPixelLyric</Product>
+    <Company>Ausfia</Company>
+    <Description>把网易云音乐正在播放的歌词实时推送到花再 Halo PixelBar 像素屏</Description>
+    <ApplicationIcon>Assets/app-icon.ico</ApplicationIcon>
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="HidSharp" Version="2.6.4" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets/app-icon.png" />
+    <Resource Include="Assets/app-icon.ico" />
+    <Resource Include="Assets/Icons/home.png" />
+    <Resource Include="Assets/Icons/sliders.png" />
+    <Resource Include="Assets/Icons/document.png" />
+    <Resource Include="Assets/Icons/info.png" />
+    <Resource Include="Assets/Icons/music.png" />
+    <Resource Include="Assets/Icons/speaker.png" />
+    <Resource Include="Assets/Icons/globe.png" />
+    <Resource Include="Assets/Icons/sun.png" />
+    <Resource Include="Assets/Icons/moon.png" />
+  </ItemGroup>
+
 </Project>

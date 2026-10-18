@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 
 namespace HaloPixelLyric;
@@ -26,6 +27,9 @@ public sealed class DisplaySettings
 
     /// <summary>间奏钳制倍数：官方句长超过估算值 N 倍判为间奏拉伸</summary>
     public double InterludeFactor { get; set; } = 3.0;
+
+    /// <summary>界面外观：auto（跟随系统）/ light / dark</summary>
+    public string Theme { get; set; } = "auto";
 
     /// <summary>CDP 调试端口</summary>
     public int CdpPort { get; set; } = 9222;

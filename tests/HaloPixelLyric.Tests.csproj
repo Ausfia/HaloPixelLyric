@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../SmtcMediaSource.cs" Link="SmtcMediaSource.cs" />
+    <Compile Include="../NeteaseLyricProvider.cs" Link="NeteaseLyricProvider.cs" />
+    <Compile Include="../LyricDisplayScheduler.cs" Link="LyricDisplayScheduler.cs" />
+    <Compile Include="../LyricLogic.cs" Link="LyricLogic.cs" />
+    <Compile Include="../Settings.cs" Link="Settings.cs" />
+    <Compile Include="../LyricService.cs" Link="LyricService.cs" />
+    <Compile Include="../CdpLyricService.cs" Link="CdpLyricService.cs" />
+    <Compile Include="../SmtcLyricService.cs" Link="SmtcLyricService.cs" />
+    <Compile Include="../CdpClient.cs" Link="CdpClient.cs" />
+    <Compile Include="../WatcherScript.cs" Link="WatcherScript.cs" />
+    <Compile Include="../Hid/*.cs" Link="Hid/%(Filename)%(Extension)" />
+    <PackageReference Include="HidSharp" Version="2.6.4" />
+  </ItemGroup>
+</Project>

@@ -77,7 +77,7 @@ public static class LyricLogic
                 var minStr = m.Groups[1].Success ? m.Groups[1].Value.TrimEnd(':') : "0";
                 if (!double.TryParse(minStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var min)) continue;
                 if (!double.TryParse(m.Groups[2].Value.Replace(':', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out var sec)) continue;
-                times.Add(Math.Floor(min * 60 + sec) * 1000);
+                times.Add((min * 60 + sec) * 1000);
                 line = line.Remove(m.Index, m.Length);
             }
             var text = line.Trim();
@@ -132,7 +132,7 @@ public static class LyricLogic
                 var minStr = m.Groups[1].Success ? m.Groups[1].Value.TrimEnd(':') : "0";
                 if (!double.TryParse(minStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var min)) continue;
                 if (!double.TryParse(m.Groups[2].Value.Replace(':', '.'), NumberStyles.Any, CultureInfo.InvariantCulture, out var sec)) continue;
-                times.Add(Math.Floor(min * 60 + sec) * 1000);
+                times.Add((min * 60 + sec) * 1000);
                 line = line.Remove(m.Index, m.Length);
             }
             var text = line.Trim();
@@ -254,7 +254,7 @@ public static class LyricLogic
                 int[] candidates = offset == 0 ? [targetChar] : [targetChar - offset, targetChar + offset];
                 foreach (var pos in candidates)
                 {
-                    if (pos > 0 && pos < remaining.Length && splitChars.Contains(remaining[pos - 1]))
+                    if (pos > 0 && pos <= charsFit && pos < remaining.Length && splitChars.Contains(remaining[pos - 1]))
                     {
                         best = pos;
                         break;

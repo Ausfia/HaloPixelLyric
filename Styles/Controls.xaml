@@ -277,6 +277,56 @@
         </Style.Triggers>
     </Style>
 
+    <!-- ===================== 同步来源分段选择 ===================== -->
+    <Style x:Key="SourceSegment" TargetType="RadioButton">
+        <Setter Property="Height" Value="36" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondaryBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalContentAlignment" Value="Center" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Segment" Background="Transparent" CornerRadius="8"
+                            BorderBrush="Transparent" BorderThickness="1" Padding="10,0"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <MultiTrigger>
+                            <MultiTrigger.Conditions>
+                                <Condition Property="IsMouseOver" Value="True" />
+                                <Condition Property="IsChecked" Value="False" />
+                            </MultiTrigger.Conditions>
+                            <Setter TargetName="Segment" Property="Background" Value="{DynamicResource ControlHoverBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+                        </MultiTrigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Segment" Property="Background" Value="{DynamicResource CardBrush}" />
+                            <Setter TargetName="Segment" Property="BorderBrush" Value="{DynamicResource CardBorderBrush}" />
+                            <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+                            <Setter Property="FontWeight" Value="SemiBold" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Segment" Property="Opacity" Value="0.78" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Segment" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Cursor" Value="Arrow" />
+                            <Setter TargetName="Segment" Property="Opacity" Value="0.55" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ===================== 侧栏导航 ===================== -->
     <Style x:Key="NavItem" TargetType="RadioButton">
         <Setter Property="Height" Value="40" />

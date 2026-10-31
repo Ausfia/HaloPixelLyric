@@ -240,29 +240,76 @@
                                 <RowDefinition Height="88" />
                             </Grid.RowDefinitions>
 
-                            <Grid Grid.Row="0" Margin="0,4,0,18">
-                                <StackPanel>
-                                    <TextBlock Text="控制台" FontSize="26" FontWeight="SemiBold"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock Text="歌词同步状态与像素屏实时预览" FontSize="12.5" Margin="0,4,0,0"
-                                               Foreground="{DynamicResource TextSecondaryBrush}" />
-                                </StackPanel>
-                                <Button x:Name="HomeLogBtn" Style="{StaticResource GhostButton}"
-                                        Foreground="{DynamicResource AccentBrush}"
-                                        HorizontalAlignment="Right" VerticalAlignment="Center"
-                                        Click="HomeLogBtn_Click">
-                                    <StackPanel Orientation="Horizontal">
-                                        <Grid Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,6,0">
-                                            <Rectangle Width="14" Height="14" Fill="{DynamicResource AccentBrush}">
+                            <StackPanel Grid.Row="0" Margin="0,4,0,18">
+                                <Grid Margin="0,0,0,16">
+                                    <StackPanel>
+                                        <TextBlock Text="控制台" FontSize="26" FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="歌词同步状态与像素屏实时预览" FontSize="12.5" Margin="0,4,0,0"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}" />
+                                    </StackPanel>
+                                    <Button x:Name="HomeLogBtn" Style="{StaticResource GhostButton}"
+                                            Foreground="{DynamicResource AccentBrush}"
+                                            HorizontalAlignment="Right" VerticalAlignment="Center"
+                                            Click="HomeLogBtn_Click">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Rectangle Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,6,0"
+                                                       Fill="{DynamicResource AccentBrush}">
                                                 <Rectangle.OpacityMask>
                                                     <ImageBrush ImageSource="/Assets/Icons/document.png" Stretch="Uniform" />
                                                 </Rectangle.OpacityMask>
                                             </Rectangle>
-                                        </Grid>
-                                        <TextBlock Text="查看运行日志" VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
+                                            <TextBlock Text="查看运行日志" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                </Grid>
+
+                                <Border Style="{StaticResource Card}" Padding="16,13">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="16" />
+                                            <ColumnDefinition Width="272" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel VerticalAlignment="Center">
+                                            <StackPanel Orientation="Horizontal">
+                                                <Border Width="24" Height="24" CornerRadius="7" Margin="0,0,8,0"
+                                                        Background="{DynamicResource AccentSoftBrush}">
+                                                    <Rectangle Width="13" Height="13" Fill="{DynamicResource AccentBrush}">
+                                                        <Rectangle.OpacityMask>
+                                                            <ImageBrush ImageSource="/Assets/Icons/sliders.png" Stretch="Uniform" />
+                                                        </Rectangle.OpacityMask>
+                                                    </Rectangle>
+                                                </Border>
+                                                <TextBlock Text="同步来源" Style="{StaticResource SectionTitle}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                            <TextBlock x:Name="SourceDescription" FontSize="11" Margin="0,6,0,0"
+                                                       TextWrapping="Wrap" LineHeight="16"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}" />
+                                        </StackPanel>
+                                        <Border Grid.Column="2" Padding="3" CornerRadius="11" VerticalAlignment="Center"
+                                                Background="{DynamicResource ControlBrush}"
+                                                ToolTip="停止同步后可切换来源，选择后自动保存。">
+                                            <Grid x:Name="SourceOptions">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition />
+                                                    <ColumnDefinition />
+                                                </Grid.ColumnDefinitions>
+                                                <RadioButton x:Name="CdpSourceOption" Grid.Column="0"
+                                                             Style="{StaticResource SourceSegment}"
+                                                             Content="网易云 CDP" GroupName="PlaybackSource"
+                                                             AutomationProperties.Name="网易云 CDP"
+                                                             Tag="Cdp" Checked="SourceOption_Checked" />
+                                                <RadioButton x:Name="SmtcSourceOption" Grid.Column="1"
+                                                             Style="{StaticResource SourceSegment}"
+                                                             Content="Windows SMTC" GroupName="PlaybackSource"
+                                                             AutomationProperties.Name="Windows SMTC"
+                                                             Tag="Smtc" Checked="SourceOption_Checked" />
+                                            </Grid>
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
 
                             <!-- Hero 状态卡 -->
                             <Border Grid.Row="1" CornerRadius="18" Background="{DynamicResource HeroBrush}"
@@ -476,7 +523,7 @@
                                         <StackPanel Grid.Column="1" Margin="10,1,0,0">
                                             <TextBlock Text="播放器" FontSize="10.5"
                                                        Foreground="{DynamicResource TextTertiaryBrush}" />
-                                            <TextBlock Text="网易云音乐" FontSize="13" FontWeight="Medium"
+                                            <TextBlock x:Name="PlayerSourceText" Text="网易云音乐" FontSize="13" FontWeight="Medium"
                                                        Margin="0,5,0,0"
                                                        Foreground="{DynamicResource TextPrimaryBrush}" />
                                         </StackPanel>
@@ -526,7 +573,7 @@
                                         <StackPanel Grid.Column="1" Margin="10,1,0,0">
                                             <TextBlock Text="通道" FontSize="10.5"
                                                        Foreground="{DynamicResource TextTertiaryBrush}" />
-                                            <TextBlock Text="CDP:9222" FontSize="13" FontWeight="Medium"
+                                            <TextBlock x:Name="ChannelText" Text="CDP / USB HID" FontSize="13" FontWeight="Medium"
                                                        Margin="0,5,0,0"
                                                        Foreground="{DynamicResource TextPrimaryBrush}" />
                                         </StackPanel>
@@ -692,7 +739,7 @@
                                             <TextBlock FontSize="11.5" LineHeight="19" Margin="9,0,0,0"
                                                        TextWrapping="Wrap"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
-                                                       Text="参数只影响显示节奏：翻页 / 预推变大→更早切换；容量决定单页字数；间奏倍数越大，越不容易把长间奏误判为演唱。修改后点右上角保存立即生效。" />
+                                                       Text="翻页提前量和容量适用于两种模式；预推提前量与间奏钳制当前仅用于 SMTC。CDP 保留原版调度方式。修改后点右上角保存。" />
                                         </DockPanel>
                                     </Border>
                                 </StackPanel>
@@ -828,13 +875,13 @@
                                                                    Foreground="{DynamicResource AccentBrush}" />
                                                     </Border>
                                                 </StackPanel>
-                                                <TextBlock Text="把网易云音乐正在播放的歌词，实时推送到花再 Halo PixelBar 像素屏。"
+                                                <TextBlock Text="通过网易云 CDP 或 Windows SMTC 读取播放状态，将歌词实时推送到花再 Halo PixelBar 像素屏。"
                                                            FontSize="12.5" Margin="0,10,0,0" TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextSecondaryBrush}" />
                                                 <TextBlock FontSize="11.5" LineHeight="19" Margin="0,10,0,0"
                                                            TextWrapping="Wrap"
                                                            Foreground="{DynamicResource TextSecondaryBrush}"
-                                                           Text="通过 CEF 标准调试接口（CDP）读取播放进度与歌词，不注入 DLL、不读写进程内存、不依赖网易云版本偏移；播放器升级后通常无需跟进。" />
+                                                           Text="默认 CDP 模式直接获取网易云歌曲 ID 与歌词。可选 SMTC 模式读取系统媒体会话，无需调试端口，再按歌名、歌手等匹配网易云歌词；需要播放器提供有效时间轴。" />
                                                 <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                                                     <Button x:Name="GithubBtn" Style="{StaticResource AccentButton}"
                                                             Content="在 GitHub 上查看" Click="GithubBtn_Click" />
@@ -852,7 +899,7 @@
                                             <TextBlock FontSize="11.5" LineHeight="20" Margin="0,8,0,0"
                                                        TextWrapping="Wrap"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
-                                                       Text="HID 通信层源自 HaloPixelToolBox（MIT）｜协议参考 halo-pixelbar-mcp（MIT）&#x0a;播放进度与歌词来自网易云音乐 CEF 调试接口，仅供学习研究，与花再、网易云官方无关联。" />
+                                                       Text="HID 通信层源自 HaloPixelToolBox（MIT）｜协议参考 halo-pixelbar-mcp（MIT）&#x0a;播放状态来自网易云 CDP 或 Windows SMTC，歌词来自网易云音乐，仅供学习研究，与花再、网易云官方无关联。" />
                                             <Border Height="1" Background="{DynamicResource SeparatorBrush}"
                                                     Margin="0,14,0,12" />
                                             <TextBlock Text="© 2026 HaloPixelLyric · MIT License" FontSize="10.5"
@@ -928,7 +975,7 @@
                         <ScaleTransform x:Name="DialogScale" ScaleX="0.94" ScaleY="0.94" />
                     </Border.RenderTransform>
                     <StackPanel>
-                        <TextBlock x:Name="DialogTitle" Text="需要重启网易云音乐" FontSize="16"
+                        <TextBlock x:Name="DialogTitle" Text="请确认" FontSize="16"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}" />
                         <TextBlock x:Name="DialogMessage" FontSize="12.5" LineHeight="20" Margin="0,10,0,0"

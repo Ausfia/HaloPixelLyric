@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _dark;
     private bool _exitRequested;
     private bool _suppressNav;
+    private bool _loadingSource;
     private bool _logAutoScroll = true;
     private int _currentPage;
     private int _lyricVersion;
@@ -126,6 +127,11 @@ public partial class MainWindow : Window
 
     private void LoadSettingsIntoUi()
     {
+        _loadingSource = true;
+        if (!Enum.IsDefined(_settings.PlaybackSource)) _settings.PlaybackSource = PlaybackSource.Cdp;
+        CdpSourceOption.IsChecked = _settings.PlaybackSource == PlaybackSource.Cdp;
+        SmtcSourceOption.IsChecked = _settings.PlaybackSource == PlaybackSource.Smtc;
+        _loadingSource = false;
         LeadSlider.Value = _settings.PageLeadMs;
         PreSlider.Value = _settings.PrePushLeadMs;
         UnitsSlider.Value = _settings.StaticMaxUnits;
@@ -283,6 +289,16 @@ public partial class MainWindow : Window
 
     // ================= 服务状态 =================
 
+    private void SourceOption_Checked(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSource || sender is not RadioButton { Tag: string tag } ||
+            !Enum.TryParse<PlaybackSource>(tag, out var source)) return;
+        if (!_service.SelectSource(source)) return;
+        _settings.Save();
+        UpdateStatus();
+        Log($"[设置] 播放来源已保存：{(source == PlaybackSource.Smtc ? "Windows SMTC" : "网易云 CDP")}");
+    }
+
     private void ToggleBtn_Click(object sender, RoutedEventArgs e)
     {
         if (_service.IsRunning) _service.Stop();
@@ -293,7 +309,11 @@ public partial class MainWindow : Window
     private void OnRunningChanged()
     {
         if (Dispatcher.CheckAccess()) UpdateStatus();
-        else Dispatcher.BeginInvoke(new Action(UpdateStatus));
+        else Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (!_service.IsRunning && _confirmTcs is not null) CloseDialog(false);
+            UpdateStatus();
+        }));
     }
 
     private void UpdateStatus()
@@ -303,7 +323,16 @@ public partial class MainWindow : Window
         HeroStatusText.Text = running ? "运行中" : "已停止";
         HeroDot.Fill = (Brush)FindResource(running ? "SuccessBrush" : "DangerBrush");
         HeroTitle.Text = running ? "正在同步" : "准备就绪";
-        HeroSubtitle.Text = running ? "网易云歌词已实时联动像素屏" : "点击启动，让像素屏跟着歌词呼吸";
+        var source = running ? _service.ActiveSource : _settings.PlaybackSource;
+        var smtc = source == PlaybackSource.Smtc;
+        SourceOptions.IsEnabled = !running;
+        SourceDescription.Text = running ? "正在同步 · 停止后可切换来源" : smtc
+            ? "系统媒体会话 · 自动匹配歌词，无需调试端口"
+            : "网易云直连 · 获取准确歌词，首次需开启调试端口";
+        PlayerSourceText.Text = smtc ? "系统媒体会话" : "网易云音乐";
+        ChannelText.Text = smtc ? "SMTC / USB HID" : $"CDP:{_settings.CdpPort}";
+        HeroSubtitle.Text = running ? (smtc ? "SMTC 歌词同步服务运行中" : "网易云 CDP 歌词同步服务运行中")
+            : "点击启动，让像素屏跟着歌词呼吸";
         SidebarStatusText.Text = running ? "同步中" : "未启动";
         SidebarStatusDot.Fill = (Brush)FindResource(running ? "SuccessBrush" : "DangerBrush");
         SidebarStatusDetail.Text = running ? "花再 Halo PixelBar · 已连接" : "花再 Halo PixelBar";

@@ -29,7 +29,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-MinVersion=10.0
+MinVersion=10.0.17763
 CloseApplications=yes
 RestartApplications=no
 VersionInfoVersion={#MyAppVersion}.0
@@ -44,7 +44,7 @@ Name: "chinesesimplified"; MessagesFile: "ChineseSimplified.isl"
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "附加任务："; Flags: unchecked
 
 [Files]
-Source: "..\bin\Release\net10.0-windows\win-x64\publish\HaloPixelLyric.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\bin\Release\net10.0-windows10.0.19041.0\win-x64\publish\HaloPixelLyric.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\docs\screenshot.png"; DestDir: "{app}\docs"; Flags: ignoreversion

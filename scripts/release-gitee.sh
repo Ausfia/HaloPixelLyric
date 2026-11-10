@@ -19,7 +19,7 @@ TAG="$1"; TITLE="$2"; NOTES="$3"; shift 3 || true
 OWNER_REPO="xia-qiuyu/HaloPixelLyric"
 API="https://gitee.com/api/v5/repos/$OWNER_REPO/releases"
 
-json_escape() { python -c 'import json,sys;print(json.dumps(sys.stdin.read(),ensure_ascii=False))' </"$1"; }
+json_escape() { python -X utf8 -c 'import json,sys;print(json.dumps(sys.stdin.read(),ensure_ascii=False))' < "$1"; }
 
 # 1) 查已有发行版（幂等）
 REL_ID=$(curl -sf "$API/tags/$TAG?access_token=$GITEE_TOKEN" | python -c 'import json,sys;print(json.load(sys.stdin)["id"])' 2>/dev/null || true)
@@ -30,6 +30,7 @@ if [ -z "$REL_ID" ]; then
     RESP=$(curl -sf -X POST "$API" \
         -d "access_token=$GITEE_TOKEN" \
         -d "tag_name=$TAG" \
+        -d "target_commitish=master" \
         --data-urlencode "name=$TITLE" \
         --data-urlencode "body=$BODY_JSON" \
         -d "prerelease=true")
@@ -48,9 +49,10 @@ for f in "$@"; do
         | python -c 'import json,sys;names=[a.get("name","") for a in json.load(sys.stdin).get("attach_files",[])];print(sys.argv[1] in names)' "$BASE" 2>/dev/null || echo False)
     if [ "$HAVE" = "True" ]; then echo "  已存在，跳过: $BASE"; continue; fi
     echo "  上传: $BASE ($(du -h "$f" | cut -f1)) ..."
+    # 注意: Gitee 官方文档写 files[]，实测（2026-11）仅接受单数字段 file
     curl -sf -X POST "$API/$REL_ID/attach_files" \
         -F "access_token=$GITEE_TOKEN" \
-        -F "files[]=@$f" >/dev/null
+        -F "file=@$f" >/dev/null
     echo "  完成: $BASE"
 done
 

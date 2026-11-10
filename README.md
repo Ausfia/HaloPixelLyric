@@ -2,6 +2,9 @@
 
 轻量级单文件工具：把网易云音乐正在播放的歌词实时推送到 **花再 Halo PixelBar** 像素屏。
 
+> 🇨🇳 国内用户：下载与克隆建议走 [Gitee 镜像](https://gitee.com/xia-qiuyu/HaloPixelLyric)（同步更新，附件下载更快）。
+> **2026 强化版（新版硬件）用户请先看 [v1.4.1-preview 实验版说明](https://github.com/Ausfia/HaloPixelLyric/releases/tag/v1.4.1-preview)。**
+
 它通过 **CDP（Chrome DevTools Protocol）** 读取网易云 CEF 页面里的**原生播放进度事件**
 （`audioplayer.onPlayProgress`，30Hz），再用歌曲时间轴对歌词定位与分页。
 不注入 DLL、不读写进程内存、不依赖网易云版本偏移；网易云窗口最小化、切到托盘、

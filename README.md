@@ -87,6 +87,35 @@
 - 请勿与官方客户端 / 其他工具的歌词推送同时开启（多程序写同一 HID 设备会互相覆盖）
 - CDP 调试端口 9222 仅监听本机；不想要调试口时正常重启网易云即可
 - 个别网易云前端大改版可能需要调整 `WatcherScript.cs` 中的接口名
+- **2026 强化版（新版硬件）**：软件采用 EC/ED 双协议四帧发送（见下节），若仍不显示，
+  可能是设备启用了载荷加密（协议支持 XOR/取反/XTEA 三档，加密标志由设备自报），
+  请用下方「设备诊断」流程排查。
+
+## 设备协议说明（逆向自官方 TempoHub 1.3.3）
+
+逆向 `EDIFIER TempoHub.exe`（PyInstaller 打包的 Python 3.9 程序）中的
+`driver/edifier_driver.py` / `driver/common.py` 确认：
+
+- 帧格式：`2E AA <设备类型> <命令> <长度高> <长度低> <载荷> <校验>`，64 字节报文；
+  设备类型字节 `0xEC`（旧代）/ `0xED`（新代）；长度为大端、不含校验；
+  校验 = 从 `AA` 起所有字节求和 mod 256。设备响应帧头为 `2F BB`。
+- 官方歌词推送（`hz_sound_box_qq_music_model._on_lyric_text_changed`）：
+  命令 `0xE8`，载荷 `[0x0E, 全文总长, UTF-8 文本(≤55B/包)]`（0x0E 为歌词通道）。
+- 基础查询命令 `0x65`（官方唯一免加密命令），响应载荷为
+  `[协议版本, 加密方式, 最大长度]`：加密 0x00=无、0x10=XOR 0xA5、0x30=按位取反、0x31=XTEA。
+- 本软件每次推歌词同时发送四种帧：旧 EC 帧、官方 EC 歌词帧、社区 ED 帧、官方 ED 歌词帧，
+  设备忽略不认识的帧，实现新旧固件兼容。
+
+## 设备诊断（PixelBarProbe）
+
+遇到"软件运行正常但屏幕无歌词"时，运行 [PixelBarProbe](https://github.com/Ausfia/HaloPixelLyric) 诊断包：
+
+```bash
+PixelBarProbe.exe --query-base   # 查询固件协议代际与加密状态（判读自动输出）
+PixelBarProbe.exe --send-test    # 逐帧发测试文字，观察屏幕哪一步亮起
+```
+
+生成的 `report.txt` 包含完整结果，可直接回传给开发者分析。
 
 ## 构建
 

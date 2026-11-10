@@ -153,4 +153,126 @@ public class HidPacketBuilder
         }
         return acc % 256;
     }
+
+    /// <summary>
+    /// 构造 ED 变体文字包（2026 新固件协议：设备类型字节 0xED，长度大端，校验和 = 从 AA 起求和）。
+    /// 旧固件对 ED 帧静默忽略（实测），因此与 EC 帧同时发送可兼容两代固件。
+    /// 参考实机验证记录：2E AA ED E8 | lenHi lenLo | 00 textLen utf8... | Σ(pkt[1:])&0xFF
+    /// </summary>
+    public static byte[] BuildTextEd(string text)
+    {
+        var textBytes = Encoding.UTF8.GetBytes(text);
+        // ED 规范按 UTF-8 字节数限 48（新固件文档：≤48 字节）
+        if (textBytes.Length > 48)
+        {
+            var cut = new byte[48];
+            Array.Copy(textBytes, cut, 48);
+            textBytes = cut;
+        }
+        var textLen = (byte)textBytes.Length;
+        var payloadLen = (ushort)(2 + textLen + 1); // 00 + textLen 字节 + Checksum
+
+        var list = new List<byte> { 0x2E, 0xAA, 0xED, 0xE8 };
+        // 长度字段：高字节在前（大端），与 BitConverter 小端相反
+        list.Add((byte)(payloadLen >> 8));
+        list.Add((byte)(payloadLen & 0xFF));
+        list.Add(0x00);
+        list.Add(textLen);
+        list.AddRange(textBytes);
+        // 校验和：从 AA（index 1）到文本末尾求和 mod 256
+        var acc = 0;
+        for (var i = 1; i < list.Count; i++)
+            acc += list[i];
+        list.Add((byte)(acc % 256));
+
+        return Build(list);
+    }
+
+    /// <summary>
+    /// 构造 ED 变体布局包（与 ConvertLayout 同 payload，ED 帧头/长度/校验规范）。
+    /// </summary>
+    public static byte[] ConvertLayoutEd(HaloPixelTextLayout haloPixelTextLayout)
+    {
+        byte[] payload = haloPixelTextLayout switch
+        {
+            HaloPixelTextLayout.Left => [0x01, CurrentColor.R, CurrentColor.G, CurrentColor.B, 0x00, 0x02, 0x00, 0x00, 0xff],
+            HaloPixelTextLayout.Center => [0x01, CurrentColor.R, CurrentColor.G, CurrentColor.B, 0x00, 0x02, 0x00, 0x01, 0xff],
+            HaloPixelTextLayout.Right => [0x01, CurrentColor.R, CurrentColor.G, CurrentColor.B, 0x00, 0x02, 0x00, 0x02, 0xff],
+            HaloPixelTextLayout.Stretch => [0x01, CurrentColor.R, CurrentColor.G, CurrentColor.B, 0x00, 0x02, 0x00, 0x03, 0xff],
+            HaloPixelTextLayout.ScrollLeftToRight => [0x01, CurrentColor.R, CurrentColor.G, CurrentColor.B, 0x00, 0x02, 0x01, 0x00, 0xff],
+            HaloPixelTextLayout.ScrollRightToLeft => [0x01, CurrentColor.R, CurrentColor.G, CurrentColor.B, 0x00, 0x02, 0x01, 0x01, 0xff],
+            _ => [],
+        };
+
+        if (payload.Length == 0) return [];
+
+        return BuildEdFrame(0xEF, payload);
+    }
+
+    /// <summary>
+    /// 按 ED 规范组帧：2E AA ED cmd | lenHi lenLo | payload | Σ(pkt[1:])&0xFF
+    /// </summary>
+    private static byte[] BuildEdFrame(byte cmd, byte[] payload)
+    {
+        var totalLen = (ushort)(payload.Length + 1);
+        var list = new List<byte> { 0x2E, 0xAA, 0xED, cmd };
+        list.Add((byte)(totalLen >> 8));
+        list.Add((byte)(totalLen & 0xFF));
+        list.AddRange(payload);
+        var acc = 0;
+        for (var i = 1; i < list.Count; i++)
+            acc += list[i];
+        list.Add((byte)(acc % 256));
+        return Build(list);
+    }
+
+    /// <summary>
+    /// TempoHub 1.3.3 官方通用组帧（逆向自 EDIFIER TempoHub.exe 内 driver/edifier_driver.py）：
+    /// COMMON=0x2E, HEADER=0xAA, DEVICE_TYPES=[EC,ED]，帧 = [2E AA type cmd] + 大端长度(payload 长度，不含 CRC) + payload + Σ(从 AA 起全部字节)&0xFF。
+    /// 官方软件对 EC/ED 两代设备统一使用此组帧。
+    /// </summary>
+    public static byte[] BuildOfficialFrame(byte deviceType, byte cmd, byte[] payload)
+    {
+        var list = new List<byte> { 0x2E, 0xAA, deviceType, cmd };
+        list.Add((byte)(payload.Length >> 8));
+        list.Add((byte)(payload.Length & 0xFF));
+        list.AddRange(payload);
+        var acc = 0;
+        for (var i = 1; i < list.Count; i++)
+            acc += list[i];
+        list.Add((byte)(acc & 0xFF));
+        return Build(list);
+    }
+
+    /// <summary>
+    /// 官方歌词文本帧（TempoHub hz_sound_box_qq_music_model._on_lyric_text_changed 逆向）：
+    /// CM_E8(0xE8) 命令，payload = [source_id=0x0E, 全文总字节长, UTF-8 分片(≤55B/包)]。
+    /// 日志原文："[QQMusic Model] CM_E8 发送歌词行, source_id=0x0E, 长度="。
+    /// deviceType 传 0xEC（旧设备线格式）或 0xED（新设备线格式）。
+    /// </summary>
+    public const byte LyricSourceId = 0x0E;
+
+    public static byte[] BuildLyricTextOfficial(byte deviceType, string text)
+    {
+        var textBytes = Encoding.UTF8.GetBytes(text);
+        if (textBytes.Length > 55)
+        {
+            var cut = new byte[55];
+            Array.Copy(textBytes, cut, 55);
+            textBytes = cut;
+        }
+        var payload = new byte[2 + textBytes.Length];
+        payload[0] = LyricSourceId;
+        payload[1] = (byte)textBytes.Length;
+        Array.Copy(textBytes, 0, payload, 2, textBytes.Length);
+        return BuildOfficialFrame(deviceType, 0xE8, payload);
+    }
+
+    /// <summary>
+    /// TempoHub 基础信息查询帧（CM_65，官方代码中唯一免加密命令）。
+    /// 响应 payload 含 [version, encryption, max_length]（driver/common.encrypt 逆向：
+    /// encryption 0x10=XOR 0xA5、0x30=按位取反、0x31=XTEA、0=不加密）。
+    /// </summary>
+    public static byte[] BuildBaseQuery(byte deviceType) =>
+        BuildOfficialFrame(deviceType, 0x65, []);
 }

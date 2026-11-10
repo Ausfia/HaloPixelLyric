@@ -2,7 +2,7 @@
 ; 构建：ISCC.exe installer\HaloPixelLyric.iss
 
 #define MyAppName "HaloPixelLyric"
-#define MyAppVersion "1.4.0"
+#define MyAppVersion "1.4.1"
 #define MyAppPublisher "Ausfia"
 #define MyAppURL "https://github.com/Ausfia/HaloPixelLyric"
 #define MyAppExeName "HaloPixelLyric.exe"

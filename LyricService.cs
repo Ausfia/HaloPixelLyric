@@ -132,7 +132,8 @@ public sealed class LyricService
             RunningChanged?.Invoke();
             return;
         }
-        Log?.Invoke("[ok] 像素屏已连接");
+        var pidText = device.ProductId > 0 ? $"（PID 0x{device.ProductId:X4}）" : "";
+        Log?.Invoke($"[ok] 像素屏已连接{pidText}");
         device.SetTextLayout(HaloPixelTextLayout.Center);
 
         try

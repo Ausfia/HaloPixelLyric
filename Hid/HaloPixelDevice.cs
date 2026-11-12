@@ -8,6 +8,12 @@ public partial class HaloPixelDevice
 {
     public HidDevice? CurrentDevice { get; set; }
 
+    /// <summary>设备 PID（旧款 0xA106，2026 强化版/PRO 0xA160），用于日志与支持排查。</summary>
+    public int ProductId => CurrentDevice?.ProductID ?? 0;
+
+    /// <summary>上次发送「音乐/歌词模式」帧的时间，用于 30 秒节流重发。</summary>
+    private DateTime _lastMusicModeUtc = DateTime.MinValue;
+
     public bool Initialize()
     {
         if (GetPixelDevice().FirstOrDefault() is HidDevice device)
@@ -21,9 +27,29 @@ public partial class HaloPixelDevice
         }
     }
 
+    /// <summary>
+    /// 声明进入音乐/歌词模式（TempoHub pixel_screen_set，CM_EF）。
+    /// 2026 强化版（PRO）必须先进入该模式才渲染文字，否则屏幕停在自己的场景（律动波浪）；
+    /// 旧款固件应答但不切换，无副作用。30 秒节流，避免每行歌词重复发送。
+    /// </summary>
+    private void EnsureMusicMode(HidStream stream)
+    {
+        if ((DateTime.UtcNow - _lastMusicModeUtc).TotalSeconds < 30)
+            return;
+        foreach (var deviceType in new byte[] { 0xEC, 0xED })
+        {
+            stream.Write(HidPacketBuilder.BuildPixelModeSet(
+                deviceType, 0x02, HidPacketBuilder.MusicModeIndex, 0x00, 0xFF, 0xFF));
+            Thread.Sleep(5);
+        }
+        _lastMusicModeUtc = DateTime.UtcNow;
+    }
+
     public void ShowText(string text)
     {
         using var stream = CurrentDevice?.Open();
+        if (stream != null)
+            EnsureMusicMode(stream);
         // 四帧覆盖策略（依据 TempoHub 1.3.3 官方协议逆向 + 社区实机验证）：
         // 1. 旧 EC 帧（本机旧款实机验证有效）
         // 2. 官方 EC 歌词通道帧 source_id=0x0E（TempoHub 推 PixelBar 歌词的确切发法）

@@ -275,4 +275,25 @@ public class HidPacketBuilder
     /// </summary>
     public static byte[] BuildBaseQuery(byte deviceType) =>
         BuildOfficialFrame(deviceType, 0x65, []);
+
+    /// <summary>
+    /// 像素屏模式帧（TempoHub pixel_screen_set 逆向，命令 CM_EF）：
+    /// payload = [action, r, g, b, mode_group_index, mode_index, opt0, opt1, opt2]。
+    /// action=2 为开关/模式设置；mode_index=0 表示音乐/歌词（MUSIC），1 表示场景（SCENE）。
+    /// 官方歌词路径（通用 sound_box 模块，2026 强化版 PRO 走此路径）在推文字前必须先发
+    /// action=2 / mode_index=0 / opt0=0 的「音乐模式开启」帧，否则屏幕停在自己的场景（如律动波浪）。
+    /// 旧款固件会应答该帧但不切换（其歌词模式走 ED 线 CM_ED02），因此对旧款无副作用。
+    /// </summary>
+    public const byte MusicModeIndex = 0x00;
+
+    public static byte[] BuildPixelModeSet(byte deviceType, byte action, byte modeIndex,
+        byte opt0, byte opt1, byte opt2)
+    {
+        var payload = new byte[]
+        {
+            action, CurrentColor.R, CurrentColor.G, CurrentColor.B,
+            0x00, modeIndex, opt0, opt1, opt2,
+        };
+        return BuildOfficialFrame(deviceType, 0xEF, payload);
+    }
 }

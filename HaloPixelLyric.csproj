@@ -10,9 +10,9 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>HaloPixelLyric</AssemblyName>
     <RootNamespace>HaloPixelLyric</RootNamespace>
-    <Version>1.4.2</Version>
-    <FileVersion>1.4.2.0</FileVersion>
-    <AssemblyVersion>1.4.2.0</AssemblyVersion>
+    <Version>1.4.3</Version>
+    <FileVersion>1.4.3.0</FileVersion>
+    <AssemblyVersion>1.4.3.0</AssemblyVersion>
     <Product>HaloPixelLyric</Product>
     <Company>Ausfia</Company>
     <Description>把网易云音乐正在播放的歌词实时推送到花再 Halo PixelBar 像素屏</Description>

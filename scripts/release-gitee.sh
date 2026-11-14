@@ -26,6 +26,9 @@ CURL=/c/Windows/System32/curl.exe   # MSYS 自带 curl 为 Debug 构建不可靠
 
 TITLE_FILE=.gitee-release-title.tmp; printf '%s' "$TITLE" > "$TITLE_FILE"; trap 'rm -f "$TITLE_FILE"' EXIT
 
+# 预览版/正式版开关：PRERELEASE=false 发正式版（默认 true；Gitee 的 PATCH 改不了该字段）
+PRERELEASE="${PRERELEASE:-true}"
+
 # 1) 查已有发行版（幂等）
 REL_ID=$("$CURL" -sf "$API/tags/$TAG?access_token=$GITEE_TOKEN" | python -X utf8 -c 'import json,sys;print(json.load(sys.stdin)["id"])' 2>/dev/null || true)
 
@@ -37,7 +40,7 @@ if [ -z "$REL_ID" ]; then
         -d "target_commitish=master" \
         --data-urlencode "name@$TITLE_FILE" \
         --data-urlencode "body@$NOTES" \
-        -d "prerelease=true")
+        -d "prerelease=$PRERELEASE")
     REL_ID=$(printf '%s' "$RESP" | python -X utf8 -c 'import json,sys;print(json.load(sys.stdin)["id"])')
 else
     echo "[1/3] 发行版 $TAG 已存在 (id=$REL_ID)，更新元数据并复用"
@@ -47,7 +50,7 @@ else
         -d "target_commitish=master" \
         --data-urlencode "name@$TITLE_FILE" \
         --data-urlencode "body@$NOTES" \
-        -d "prerelease=true" >/dev/null
+        -d "prerelease=$PRERELEASE" >/dev/null
 fi
 
 echo "[2/3] 发行版 id=$REL_ID"

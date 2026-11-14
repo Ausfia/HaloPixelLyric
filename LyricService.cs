@@ -304,7 +304,7 @@ public sealed class LyricService
                             // 无歌词的歌：显示一次歌名后安静（不再显示任何行）
                             lastNoLyricTitle = title;
                             lastLineText = title;
-                            try { device.ShowText(LyricLogic.TrimToByteBudget(title, 55)); LyricPushed?.Invoke(title); } catch { }
+                            try { device.ShowText(LyricLogic.TrimToByteBudget(title, 110)); LyricPushed?.Invoke(title); } catch { }
                             Log?.Invoke($"[无歌词] {title}");
                         }
                     }
@@ -373,7 +373,7 @@ public sealed class LyricService
                                     var (text, _) = queue[queueIndex];
                                     try
                                     {
-                                        device.ShowText(LyricLogic.TrimToByteBudget(text, 55));
+                                        device.ShowText(LyricLogic.TrimToByteBudget(text, 110));
                                         LyricPushed?.Invoke(text);
                                         Log?.Invoke($"[歌词]{(queue.Count > 1 ? $"({queueIndex + 1}/{queue.Count})" : "")} {text}");
                                         lastPushAt = DateTimeOffset.UtcNow;

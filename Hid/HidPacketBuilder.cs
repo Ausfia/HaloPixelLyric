@@ -261,11 +261,49 @@ public class HidPacketBuilder
             Array.Copy(textBytes, cut, 55);
             textBytes = cut;
         }
-        var payload = new byte[2 + textBytes.Length];
+        return BuildOfficialFrame(deviceType, 0xE8, BuildLyricPayload(textBytes, textBytes.Length));
+    }
+
+    /// <summary>单帧歌词分片上限（官方 _on_lyric_text_changed 的 package_max_length=55）。</summary>
+    public const int LyricChunkBytes = 55;
+
+    /// <summary>
+    /// 按官方分片规则构造歌词帧列表：
+    /// 每帧 payload 都是 [0x0E, 全文总字节长, 本片字节(≤55B)]，长行分多帧发送而不是截断。
+    /// 分片按 UTF-8 字符边界切分，避免把一个汉字切成两半。
+    /// </summary>
+    public static List<byte[]> BuildLyricTextChunks(byte deviceType, string text)
+    {
+        var all = Encoding.UTF8.GetBytes(text);
+        var frames = new List<byte[]>();
+        if (all.Length == 0)
+        {
+            frames.Add(BuildOfficialFrame(deviceType, 0xE8, BuildLyricPayload([], 0)));
+            return frames;
+        }
+        var total = all.Length;
+        var offset = 0;
+        while (offset < total)
+        {
+            var size = Math.Min(LyricChunkBytes, total - offset);
+            // 退到 UTF-8 字符边界：0b10xxxxxx 是续字节，不能作为分片起点
+            while (size > 1 && offset + size < total && (all[offset + size] & 0xC0) == 0x80)
+                size--;
+            var chunk = new byte[size];
+            Array.Copy(all, offset, chunk, 0, size);
+            frames.Add(BuildOfficialFrame(deviceType, 0xE8, BuildLyricPayload(chunk, total)));
+            offset += size;
+        }
+        return frames;
+    }
+
+    private static byte[] BuildLyricPayload(byte[] chunk, int totalLength)
+    {
+        var payload = new byte[2 + chunk.Length];
         payload[0] = LyricSourceId;
-        payload[1] = (byte)textBytes.Length;
-        Array.Copy(textBytes, 0, payload, 2, textBytes.Length);
-        return BuildOfficialFrame(deviceType, 0xE8, payload);
+        payload[1] = (byte)Math.Min(totalLength, 255);
+        Array.Copy(chunk, 0, payload, 2, chunk.Length);
+        return payload;
     }
 
     /// <summary>
@@ -285,6 +323,32 @@ public class HidPacketBuilder
     /// 旧款固件会应答该帧但不切换（其歌词模式走 ED 线 CM_ED02），因此对旧款无副作用。
     /// </summary>
     public const byte MusicModeIndex = 0x00;
+
+    /// <summary>
+    /// 屏幕开关模式（DevicePixelSettingType.SWITCH=3）。AI 版（A147）用它开屏：
+    /// 官方 SoundBoxPixelModel.set_pixel_enable → payload [1, r,g,b, group, 3, 0, 1开/0关, 0]。
+    /// 注意：AI 版实测该 0xEF 帧会关掉显示层（黑屏），实际改用 ED02（见 BuildHzPixelScreenSet）。
+    /// </summary>
+    public const byte SwitchModeIndex = 0x03;
+
+    /// <summary>
+    /// 花再（HZ）/AI 版像素屏设置帧 —— CM_ED02，走 ED 线：
+    /// 2E AA ED 02 &lt;lenHi lenLo&gt; &lt;payload&gt; &lt;CRC&gt;
+    /// 官方 ECDriver.hz_pixel_screen_set → edifier_send_payload(CM_ED02=258) → devType=0xED, cmd=0x02。
+    /// payload 两种已知用法：
+    ///   打开显示层： [0x01, 0x00, 0x01]                    （Halo Pixelbar AI 实测有效）
+    ///   歌词开关  ： [group, 0x03, 0x00, 开关, 显示模式]    （HzSoundBoxPixelMusicLyricModel 逆向）
+    /// 对 AI 版禁止再发 0xEF —— 实测会关闭显示层导致黑屏。
+    /// </summary>
+    public static byte[] BuildHzPixelScreenSet(params byte[] payload) =>
+        BuildOfficialFrame(0xED, 0x02, payload);
+
+    /// <summary>AI 版打开显示层帧：ED02 [01, 00, 01]。</summary>
+    public static byte[] BuildHzScreenOn() => BuildHzPixelScreenSet(0x01, 0x00, 0x01);
+
+    /// <summary>AI 版歌词开关帧：ED02 [group, 03, 00, 开关, 显示模式]。</summary>
+    public static byte[] BuildHzLyricSwitch(byte modeGroupIndex, bool enabled, byte displayMode = 0x01) =>
+        BuildHzPixelScreenSet(modeGroupIndex, 0x03, 0x00, (byte)(enabled ? 1 : 0), displayMode);
 
     public static byte[] BuildPixelModeSet(byte deviceType, byte action, byte modeIndex,
         byte opt0, byte opt1, byte opt2)

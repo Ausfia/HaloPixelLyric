@@ -3,7 +3,7 @@
 轻量级单文件工具：把网易云音乐正在播放的歌词实时推送到 **花再 Halo PixelBar** 像素屏。
 
 > 🇨🇳 国内用户：下载与克隆建议走 [Gitee 镜像](https://gitee.com/xia-qiuyu/HaloPixelLyric)（同步更新，附件下载更快）。
-> **2026 强化版（新版硬件）已支持（v1.4.2 起经强化版用户实测确认），直接下载最新版即可。**
+> **三个型号均已支持：旧款、2026 强化版、AI 版（v1.4.7 起经 AI 版用户实测确认），直接下载最新版即可。**
 
 它通过 **CDP（Chrome DevTools Protocol）** 读取网易云 CEF 页面里的**原生播放进度事件**
 （`audioplayer.onPlayProgress`，30Hz），再用歌曲时间轴对歌词定位与分页。
@@ -86,38 +86,44 @@
 ## 已知问题
 
 - **像素屏字库缺字**：个别生僻日文汉字/符号无法渲染（设备字库覆盖问题，缺字处显示空白）
-- 歌词行超过 55 UTF-8 字节时尾部截断（HID 单包 64 字节上限；分页后单页天然不触发）
 - 请勿与官方客户端 / 其他工具的歌词推送同时开启（多程序写同一 HID 设备会互相覆盖）
 - CDP 调试端口 9222 仅监听本机；不想要调试口时正常重启网易云即可
 - 个别网易云前端大改版可能需要调整 `WatcherScript.cs` 中的接口名
-- **2026 强化版（新版硬件）**：软件采用 EC/ED 双协议四帧发送，并在推送前自动声明
-  「音乐/歌词模式」（见下节）。若仍不显示，可能是设备启用了载荷加密，
-  请用下方「设备诊断」流程排查。
+- 三个型号（旧款 / 2026 强化版 / AI 版）协议不同，软件按 PID 自动分流；
+  若仍不显示，请用下方「设备诊断」流程排查。
 
 ## 设备协议说明（逆向自官方 TempoHub 1.3.3）
 
 逆向 `EDIFIER TempoHub.exe`（PyInstaller 打包的 Python 3.9 程序）中的
-`driver/edifier_driver.py` / `driver/common.py` / `app/bean/product_type.py` 确认：
+`driver/edifier_driver.py` / `driver/common.py` / `app/bean/product_type.py` /
+`app/frame/home/view/device/module_sound_box*` 确认：
 
 - 帧格式：`2E AA <设备类型> <命令> <长度高> <长度低> <载荷> <校验>`，64 字节报文；
   设备类型字节 `0xEC`（旧代）/ `0xED`（新代）；长度为大端、不含校验；
   校验 = 从 `AA` 起所有字节求和 mod 256。设备响应帧头为 `2F BB`。
 - **设备型号（官方 PID 枚举）**：`0xA106` = `HALO_PIXEL_BAR`（旧款）、
-  **`0xA160` = `HALO_PIXEL_BAR_PRO`（2026 强化版）**、`0xA147` = `HALO_PIXEL_BAR_AI`。
-  两代 HID 接口布局一致（MI_04 col02 / UsagePage 0xFF14 / 64 字节报告），VID 均为 `0x2D99`。
+  `0xA160` = `HALO_PIXEL_BAR_PRO`（2026 强化版）、`0xA147` = `HALO_PIXEL_BAR_AI`（AI 版）。
+  三代 HID 接口布局一致（MI_04 col02 / UsagePage 0xFF14 / 64 字节报告），VID 均为 `0x2D99`。
 - 官方歌词推送（`hz_sound_box_qq_music_model._on_lyric_text_changed`）：
-  命令 `0xE8`，载荷 `[0x0E, 全文总长, UTF-8 文本(≤55B/包)]`（0x0E 为歌词通道）。
-- **歌词模式必须先开启**：强化版走通用 `sound_box` 模块，用 `CM_EF` 像素设置帧
+  命令 `0xE8`，载荷 `[0x0E, 全文总长, UTF-8 文本(≤55B/包)]`（0x0E 为歌词通道）；
+  超过 55 字节按 55 字节分片，每帧仍带全文总长。
+- **AI 版（A147）走花再 HZ 专用协议，不能发 `CM_EF`**：
+  该代固件会把 `0xEF` 像素设置帧当成"关闭音乐可视化"，屏幕立即黑掉（文字其实仍在写入设备，
+  可用 `0xE7` 回读确认）。正确做法是用 ED 线 `CM_ED02` 维持显示层：
+  `2E AA ED 02 00 03 01 00 01`（打开显示层，CRC `0x9E`），2 秒心跳重发。
+  歌词开关的官方帧为 `CM_ED02 [mode_group, 0x03, 0x00, 开关, 显示模式]`；
+  对应状态查询 `CM_ED01` 响应字段 `[mode_group, screen_switch, lyrics_combo[0, 开关, 模式], ...]`。
+- **强化版（A160）走通用 `sound_box` 模块**，用 `CM_EF` 像素设置帧
   `[action=2, R, G, B, mode_group_index=0, mode_index=0(MUSIC), opt0=0(开启), 0xFF, 0xFF]`
   声明音乐/歌词模式后才会渲染文字；否则屏幕停在自己的场景（如律动波浪）。
-  旧款走花再 HZ 模块，歌词模式用 ED 线命令 `CM_ED02`（本软件依赖其文字直显，无需该帧）。
-- 像素屏状态查询 `CM_EE`，响应载荷
+- **旧款（A106）** 文字直显，与屏幕模式无关，无需模式帧。
+- 像素屏状态查询 `CM_EE`（旧款/强化版），响应载荷
   `[action, R, G, B, mode_group_index, mode_index, opt0..opt5]`，
   `mode_index=0` 音乐/歌词、`1` 场景（`opt0` 为场景模板号）。
 - 基础查询命令 `0x65`（官方唯一免加密命令），响应载荷为
   `[协议版本, 加密方式, 最大长度]`：加密 0x00=无、0x10=XOR 0xA5、0x30=按位取反、0x31=XTEA。
-- 本软件每次推歌词同时发送四种文字帧：旧 EC 帧、官方 EC 歌词帧、社区 ED 帧、官方 ED 歌词帧，
-  设备忽略不认识的帧，实现新旧固件兼容；并用官方模式帧声明歌词模式（30 秒节流）。
+- 本软件按型号分流：AI 版只发 `CM_ED02` 显示层帧 + `CM_E8` 文字帧；
+  其余型号发四种文字帧（旧 EC、官方 EC、社区 ED、官方 ED），设备忽略不认识的帧。
 
 ## 设备诊断（PixelBarProbe）
 

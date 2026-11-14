@@ -46,20 +46,34 @@ public partial class HaloPixelDevice
     }
 
     /// <summary>
-    /// 声明进入音乐/歌词模式（TempoHub pixel_screen_set，CM_EF）。
-    /// 仅强化版 PRO（0xA160）需要且实测有效：payload opt0=0 为「歌词开」。
-    /// 旧款（A106）应答但不执行，无需发送；AI 版（A147）该帧语义完全不同
-    /// （opt0 应为 1 且后跟选项索引），PRO 帧会导致其灭屏/复位——严格禁发。
+    /// 按型号声明显示状态。
+    /// - 强化版 PRO（0xA160）：CM_EF action=2 进歌词模式（实测有效），30 秒节流。
+    /// - AI 版（0xA147）：只用 ED02 [01,00,01] 打开显示层（2 秒心跳），
+    ///   严禁发 0xEF——0xEF 会被这代固件当成关闭音乐可视化，屏幕黑一下（社区实测）。
+    /// - 旧款（0xA106）：应答但不执行，无需发送。
     /// </summary>
     private void EnsureMusicMode(HidStream stream)
     {
-        if (ProductId != PidPro)
+        if (ProductId != PidPro && ProductId != PidAi)
             return;
-        if ((DateTime.UtcNow - _lastMusicModeUtc).TotalSeconds < 30)
-            return;
-        // 官方代码为 EC 线 CM_EF（TempoHub sound_box_pixel_music_lyric_model），只发 EC 版
-        stream.Write(HidPacketBuilder.BuildPixelModeSet(
-            0xEC, 0x02, HidPacketBuilder.MusicModeIndex, 0x00, 0xFF, 0xFF));
+        if (ProductId == PidPro)
+        {
+            if ((DateTime.UtcNow - _lastMusicModeUtc).TotalSeconds < 30)
+                return;
+            // 官方代码为 EC 线 CM_EF（sound_box_pixel_music_lyric_model），只发 EC 版
+            stream.Write(HidPacketBuilder.BuildPixelModeSet(
+                0xEC, 0x02, HidPacketBuilder.MusicModeIndex, 0x00, 0xFF, 0xFF));
+        }
+        else
+        {
+            // AI 版（A147）：只用 ED02 维持显示层，禁止发任何 0xEF 帧
+            // （0xEF 会被固件当成「关闭音乐可视化」，屏幕黑一下；社区实测结论）。
+            // ED02 [01,00,01] = 打开显示层，实测有效；配合每行 CM_E8 文字即可显示歌词。
+            // 心跳 2 秒：固件不会长期保持显示层开启，需要持续维持。
+            if ((DateTime.UtcNow - _lastMusicModeUtc).TotalSeconds < 2)
+                return;
+            stream.Write(HidPacketBuilder.BuildHzScreenOn());
+        }
         Thread.Sleep(5);
         _lastMusicModeUtc = DateTime.UtcNow;
     }
@@ -74,7 +88,8 @@ public partial class HaloPixelDevice
         {
             // AI 版（A147）：官方 EC 歌词帧实测有效（用户反馈"官方打开后出现几秒歌词"即此帧）。
             // 其余帧（旧 EC/社区 ED/官方 ED/模式帧）语义不明且有灭屏/复位风险，禁发。
-            frames = [HidPacketBuilder.BuildLyricTextOfficial(0xEC, text)];
+            // 长行按官方规则分片（每帧 ≤55 字节，payload 仍带全文总长），不截断。
+            frames = HidPacketBuilder.BuildLyricTextChunks(0xEC, text);
         }
         else
         {
@@ -88,9 +103,9 @@ public partial class HaloPixelDevice
             frames =
             [
                 HidPacketBuilder.BuildText(text),
-                HidPacketBuilder.BuildLyricTextOfficial(0xEC, text),
+                .. HidPacketBuilder.BuildLyricTextChunks(0xEC, text),
                 HidPacketBuilder.BuildTextEd(text),
-                HidPacketBuilder.BuildLyricTextOfficial(0xED, text),
+                .. HidPacketBuilder.BuildLyricTextChunks(0xED, text),
             ];
         }
         foreach (var frame in frames)
